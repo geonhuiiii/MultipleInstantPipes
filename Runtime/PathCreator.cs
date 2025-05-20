@@ -49,11 +49,14 @@ namespace InstantPipes
         private List<Point> FindPath(Point start, Point target, Vector3 startNormal)
         {
             var toSearch = new List<Point> { start };
+            var processed = new List<Point>();
             var visited = new List<Vector3>();
             var priorityFactor = start.GetDistanceTo(target) / 100;
             Random.InitState((int)(Chaos * 100));
 
             Dictionary<Vector3, Point> pointDictionary = new Dictionary<Vector3, Point>();
+
+            Debug.Log($"Starting path finding from {start.Position} to {target.Position} with radius: {Radius}");
 
             int iterations = 0;
             while (toSearch.Count > 0 && iterations < MaxIterations)
@@ -65,9 +68,10 @@ namespace InstantPipes
                     if (t.F < current.F || t.F == current.F && t.H < current.H) current = t;
 
                 visited.Add(current.Position);
+                processed.Add(current);
                 toSearch.Remove(current);
 
-                if (Vector3.Distance(current.Position, target.Position) <= GridSize * 2)
+                if (Vector3.Distance(current.Position, target.Position) <= GridSize * 1.5f)
                 {
                     var currentPathPoint = current;
                     var path = new List<Point>();
@@ -80,6 +84,10 @@ namespace InstantPipes
                         currentPathPoint = currentPathPoint.Connection;
                     }
                     path.Reverse();
+                    
+                    SmoothPath(path, visited);
+                    
+                    Debug.Log($"Path found! Points: {path.Count}");
                     return path;
                 }
 
@@ -108,9 +116,23 @@ namespace InstantPipes
 
                     if (NearObstaclesPriority != 0)
                     {
-                        costToNeighbor += NearObstaclesPriority * neighbor.GetDistanceToNearestObstacle() * priorityFactor / 10;
+                        float distanceToObstacle = neighbor.GetDistanceToNearestObstacle();
+                        
+                        if (distanceToObstacle < Radius * 2.0f)
+                        {
+                            costToNeighbor += 50000;
+                            Debug.Log($"Very close to obstacle: {distanceToObstacle} < {Radius * 2.0f}, adding 50000 to cost");
+                        }
+                        else if (distanceToObstacle < Radius * 4.0f)
+                        {
+                            costToNeighbor += NearObstaclesPriority * 20 * priorityFactor;
+                            Debug.Log($"Close to obstacle: {distanceToObstacle} < {Radius * 4.0f}, adding {NearObstaclesPriority * 20 * priorityFactor} to cost");
+                        }
+                        else
+                        {
+                            costToNeighbor += NearObstaclesPriority * distanceToObstacle * priorityFactor / 20;
+                        }
                     }
-
 
                     if (!toSearch.Contains(neighbor) || costToNeighbor < neighbor.G)
                     {
@@ -126,7 +148,46 @@ namespace InstantPipes
                 }
             }
 
+            Debug.Log($"Path not found after {iterations} iterations.");
             return null;
+        }
+
+        private void SmoothPath(List<Point> path, List<Vector3> visited)
+        {
+            if (path.Count <= 2) return;
+
+            int i = 0;
+            while (i < path.Count - 2)
+            {
+                Point current = path[i];
+                
+                for (int j = path.Count - 1; j > i + 1; j--)
+                {
+                    Point target = path[j];
+                    
+                    bool clearPath = true;
+                    Vector3 direction = (target.Position - current.Position).normalized;
+                    float distance = Vector3.Distance(current.Position, target.Position);
+                    
+                    for (float step = 0; step < distance; step += Radius)
+                    {
+                        Vector3 point = current.Position + direction * step;
+                        if (Physics.CheckSphere(point, Radius * 1.2f))
+                        {
+                            clearPath = false;
+                            break;
+                        }
+                    }
+                    
+                    if (clearPath)
+                    {
+                        path.RemoveRange(i + 1, j - i - 1);
+                        break;
+                    }
+                }
+                
+                i++;
+            }
         }
 
         private bool AreOnSameLine(Vector3 point1, Vector3 point2, Vector3 point3)
@@ -153,7 +214,33 @@ namespace InstantPipes
             public float H;
             public float F => G + H;
 
-            private readonly Vector3[] _directions = { Vector3.up, Vector3.down, Vector3.left, Vector3.right, Vector3.forward, Vector3.back };
+            private readonly Vector3[] _directions = { 
+                Vector3.up, Vector3.down, Vector3.left, Vector3.right, 
+                Vector3.forward, Vector3.back, 
+                // 수평 대각선
+                (Vector3.forward + Vector3.right).normalized,
+                (Vector3.forward + Vector3.left).normalized,
+                (Vector3.back + Vector3.right).normalized,
+                (Vector3.back + Vector3.left).normalized,
+                // 수직 대각선 추가
+                (Vector3.up + Vector3.forward).normalized,
+                (Vector3.up + Vector3.back).normalized,
+                (Vector3.up + Vector3.left).normalized,
+                (Vector3.up + Vector3.right).normalized,
+                (Vector3.down + Vector3.forward).normalized,
+                (Vector3.down + Vector3.back).normalized,
+                (Vector3.down + Vector3.left).normalized,
+                (Vector3.down + Vector3.right).normalized,
+                // 3방향 대각선 추가
+                (Vector3.up + Vector3.forward + Vector3.right).normalized,
+                (Vector3.up + Vector3.forward + Vector3.left).normalized,
+                (Vector3.up + Vector3.back + Vector3.right).normalized,
+                (Vector3.up + Vector3.back + Vector3.left).normalized,
+                (Vector3.down + Vector3.forward + Vector3.right).normalized,
+                (Vector3.down + Vector3.forward + Vector3.left).normalized,
+                (Vector3.down + Vector3.back + Vector3.right).normalized,
+                (Vector3.down + Vector3.back + Vector3.left).normalized
+            };
 
             public Point(Vector3 position)
             {
@@ -172,8 +259,23 @@ namespace InstantPipes
                 float minDistance = 200;
 
                 foreach (var direction in _directions)
+                {
                     if (Physics.Raycast(Position, direction, out RaycastHit hitPoint, 200))
+                    {
                         minDistance = Mathf.Min(minDistance, hitPoint.distance);
+                    }
+                }
+
+                Collider[] colliders = Physics.OverlapSphere(Position, 10f);
+                foreach (var collider in colliders)
+                {
+                    if (collider.isTrigger)
+                        continue;
+                        
+                    Vector3 closestPoint = collider.ClosestPoint(Position);
+                    float distance = Vector3.Distance(Position, closestPoint);
+                    minDistance = Mathf.Min(minDistance, distance);
+                }
 
                 return minDistance;
             }
@@ -181,12 +283,24 @@ namespace InstantPipes
             public List<Vector3> GetNeighbors(float gridSize, float radius, Quaternion rotation)
             {
                 var list = new List<Vector3>();
+                
+                Debug.Log($"Getting neighbors with gridSize: {gridSize}, radius: {radius}");
 
-                foreach (var direction in _directions)
+                Vector3[] extendedDirections = new Vector3[_directions.Length];
+                System.Array.Copy(_directions, extendedDirections, _directions.Length);
+
+                foreach (var direction in extendedDirections)
                 {
                     var rotatedDirection = rotation * direction;
-                    if (!Physics.SphereCast(Position, radius, rotatedDirection, out RaycastHit hit, gridSize + radius))
+                    
+                    if (!Physics.SphereCast(Position, radius * 1.2f, rotatedDirection, out RaycastHit hit, gridSize + radius))
+                    {
                         list.Add(Position + rotatedDirection * gridSize);
+                    }
+                    else
+                    {
+                        Debug.Log($"Obstacle detected at distance: {hit.distance} in direction: {rotatedDirection}");
+                    }
                 }
 
                 return list;
