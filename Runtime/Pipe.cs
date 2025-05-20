@@ -22,9 +22,26 @@ namespace InstantPipes
 
         private float _ringThickness => _generator.HasExtrusion ? 0 : _generator.RingThickness;
 
+        // 원통 생성 평면 유형 (기본값: Y-X 평면)
+        private PlaneType _cylinderPlane = PlaneType.YX;
+
+        // 평면 유형 열거형
+        public enum PlaneType
+        {
+            YX, // Y-X 평면 (원래 기본값): Z축이 파이프 길이 방향
+            XZ, // X-Z 평면 (Y축이 높이): Y축이 파이프 길이 방향
+            YZ  // Y-Z 평면 (X축이 길이): X축이 파이프 길이 방향
+        }
+
         public Pipe(List<Vector3> points)
         {
             Points = points;
+        }
+
+        public Pipe(List<Vector3> points, PlaneType cylinderPlane)
+        {
+            Points = points;
+            _cylinderPlane = cylinderPlane;
         }
 
         public float GetMaxDistanceBetweenPoints()
@@ -37,91 +54,112 @@ namespace InstantPipes
             return maxDistance;
         }
 
+        /// <summary>
+        /// 파이프 메시를 생성하고 콜라이더 설정에 필요한 정보를 포함하여 반환합니다.
+        /// </summary>
         public List<Mesh> GenerateMeshes(PipeGenerator generator)
         {
+            return GenerateMeshes(generator, _cylinderPlane);
+        }
+
+        /// <summary>
+        /// 지정된 평면 방향으로 파이프 메시를 생성합니다.
+        /// </summary>
+        public List<Mesh> GenerateMeshes(PipeGenerator generator, PlaneType cylinderPlane)
+        {
             var meshes = new List<Mesh>();
-
-            // Validate input
-            if (Points == null || Points.Count < 2)
-            {
-                Debug.LogError("Cannot generate pipe mesh: insufficient points");
-                return meshes;
-            }
-
+            _cylinderPlane = cylinderPlane;
             _generator = generator;
 
             ClearMeshInfo();
 
             var ringPoints = new List<int>();
 
-            // Initial direction and rotation setup with validation
-            Vector3 initialDirection = Vector3.forward;
-            if (Points.Count >= 2)
-            {
-                // 시작점에서 끝점으로 향하는 방향
-                initialDirection = (Points[1] - Points[0]).normalized;
-                if (initialDirection == Vector3.zero) // Handle case where points are too close
-                {
-                    initialDirection = Vector3.forward;
-                    Debug.LogWarning("Pipe start points too close, using default direction");
-                }
-            }
-
-            // 회전 계산 개선: 모든 주요 축에 대한 처리
-            Vector3 upVector = DetermineUpVector(initialDirection);
+            var direction = (Points[0] - Points[1]).normalized;
             
-            var rotation = Quaternion.LookRotation(initialDirection, upVector);
+            // 방향에 따른 초기 회전 설정
+            Quaternion rotation;
+            if (direction != Vector3.zero)
+            {
+                // 평면 유형에 따라 적절한 up 벡터 선택
+                Vector3 upVector = GetUpVector();
+                rotation = Quaternion.LookRotation(direction, upVector);
+            }
+            else
+            {
+                rotation = Quaternion.identity;
+            }
+            
             _previousRotation = rotation;
             _bezierPoints.Add(new BezierPoint(Points[0], rotation));
 
+            // 링 생성 간격 조정을 위한 최소 거리 계산
+            float minRingDistance = Mathf.Max(1.0f, _generator.Radius * 3); // 반지름의 3배 이상 간격
+            float lastRingPosition = 0f;
+            float totalPathLength = 0f;
+
+            // 전체 경로 길이 계산
+            for (int i = 1; i < Points.Count; i++)
+            {
+                totalPathLength += Vector3.Distance(Points[i-1], Points[i]);
+            }
+
             for (int pipePoint = 1; pipePoint < Points.Count - 1; pipePoint++)
             {
+                bool shouldAddRingPoint = false;
+                
+                // 각 파이프 포인트 사이 거리 계산
+                float segmentDistance = Vector3.Distance(Points[pipePoint-1], Points[pipePoint]);
+                float normalizedPos = segmentDistance / totalPathLength;
+                
+                // 거리 기반 링 추가 로직
+                if (segmentDistance > minRingDistance * 2)
+                {
+                    shouldAddRingPoint = true;
+                }
+                
                 for (int s = 0; s < _generator.CurvedSegmentCount + 1; s++)
                 {
-                    _bezierPoints.Add(GetBezierPoint((s / (float)_generator.CurvedSegmentCount), pipePoint));
-                    if (s == 0 || s == _generator.CurvedSegmentCount)
-                        ringPoints.Add(_bezierPoints.Count - 1);
+                    float t = s / (float)_generator.CurvedSegmentCount;
+                    _bezierPoints.Add(GetBezierPoint(t, pipePoint));
+                    
+                    // 링 위치 결정 로직
+                    if ((s == 0 || s == _generator.CurvedSegmentCount) && shouldAddRingPoint)
+                    {
+                        // 최소 거리 조건 확인
+                        float currentPos = lastRingPosition + segmentDistance * t;
+                        if (currentPos - lastRingPosition >= minRingDistance)
+                        {
+                            ringPoints.Add(_bezierPoints.Count - 1);
+                            lastRingPosition = currentPos;
+                        }
+                    }
                 }
             }
 
-            // Use stable rotation calculation for final point
-            Vector3 finalDirection = Vector3.forward;
-            if (Points.Count >= 2)
-            {
-                // 끝에서 앞쪽으로 향하는 방향
-                finalDirection = (Points[Points.Count - 1] - Points[Points.Count - 2]).normalized;
-                if (finalDirection == Vector3.zero)
-                {
-                    finalDirection = initialDirection;
-                    Debug.LogWarning("Pipe end points too close, using initial direction");
-                }
-            }
-            
-            // 최종 점에 대한 회전 계산 개선
-            upVector = DetermineUpVector(finalDirection);
-            
-            Quaternion finalRotation = Quaternion.LookRotation(finalDirection, upVector);
-            // Preserve rotation consistency with previous segments
-            finalRotation *= Quaternion.AngleAxis(_currentAngleOffset, Vector3.forward);
-            _bezierPoints.Add(new BezierPoint(Points[Points.Count - 1], finalRotation));
+            _bezierPoints.Add(new BezierPoint(Points[Points.Count - 1], _previousRotation));
 
             GenerateVertices();
             GenerateUVs();
             GenerateTriangles();
 
-            meshes.Add(new Mesh
+            var mainMesh = new Mesh
             {
                 vertices = _verts.ToArray(),
                 normals = _normals.ToArray(),
                 uv = _uvs.ToArray(),
                 triangles = _triIndices.ToArray()
-            });
+            };
+            mainMesh.RecalculateBounds();
+            meshes.Add(mainMesh);
+            
             _verts = new List<Vector3>();
             _normals = new List<Vector3>();
             _uvs = new List<Vector2>();
             _triIndices = new List<int>();
 
-            if (_generator.HasRings)
+            // 중간 링 생성 (캡과 별도로 처리)
+            if (_generator.HasRings && ringPoints.Count > 0)
             {
                 if (_generator.HasExtrusion)
                 {
@@ -129,59 +167,114 @@ namespace InstantPipes
                     GenerateUVs();
                     GenerateTriangles(isExtruded: true);
 
-                    for (int i = 1; i < _bezierPoints.Count - 1; i += _generator.CurvedSegmentCount + 1)
+                    // 링 간격 조정
+                    int ringStep = Mathf.Max(1, _generator.CurvedSegmentCount / 2);
+                    _planes.Clear(); // 기존 평면 정보 초기화
+                    
+                    for (int i = 1; i < _bezierPoints.Count - 1; i += _generator.CurvedSegmentCount + ringStep)
                     {
+                        if (i >= _bezierPoints.Count - 1) break;
+                        
                         _planes.Add(new PlaneInfo(_bezierPoints[i], _generator.RingRadius + _generator.Radius, false));
-                        if (i + _generator.CurvedSegmentCount >= _bezierPoints.Count) break;
-                        _planes.Add(new PlaneInfo(_bezierPoints[i + _generator.CurvedSegmentCount], _generator.RingRadius + _generator.Radius, true));
+                        
+                        int nextIndex = i + _generator.CurvedSegmentCount;
+                        if (nextIndex >= _bezierPoints.Count - 1) break;
+                        
+                        _planes.Add(new PlaneInfo(_bezierPoints[nextIndex], _generator.RingRadius + _generator.Radius, true));
                     }
                 }
                 else
                 {
-                    foreach (var point in ringPoints) GenerateDisc(_bezierPoints[point]);
+                    // 최적화: 링 간격 조정
+                    int maxRings = Mathf.Min(ringPoints.Count, 5); // 최대 링 개수 제한
+                    int step = Mathf.Max(1, ringPoints.Count / maxRings);
+                    
+                    for (int i = 0; i < ringPoints.Count; i += step)
+                    {
+                        GenerateDisc(_bezierPoints[ringPoints[i]]);
+                    }
                 }
             }
 
+            // 캡 생성 로직은 독립적으로 유지
             if (_generator.HasCaps)
             {
-                GenerateDisc(_bezierPoints[_bezierPoints.Count - 1]);
-                GenerateDisc(_bezierPoints[0]);
+                // 명시적으로 시작과 끝 캡 생성
+                GenerateDisc(_bezierPoints[_bezierPoints.Count - 1], true); // 끝 캡
+                GenerateDisc(_bezierPoints[0], true); // 시작 캡
             }
 
             foreach (var plane in _planes) GeneratePlane(plane);
 
-            // 두 번째 메시 생성 및 최적화
-            var secondMesh = new Mesh
+            var secondaryMesh = new Mesh
             {
                 vertices = _verts.ToArray(),
                 normals = _normals.ToArray(),
                 uv = _uvs.ToArray(),
                 triangles = _triIndices.ToArray()
             };
-            
-            // 메시 최적화 - 노멀 재계산 및 바운드 최적화
-            if (secondMesh.vertexCount > 0)
-            {
-                // 메시의 방향이 잘못되었을 경우를 대비해 노멀 재계산
-                secondMesh.RecalculateNormals();
-                secondMesh.RecalculateBounds();
-                // 최적화 (필요시)
-                // secondMesh.Optimize();
-                
-                meshes.Add(secondMesh);
-            }
-
-            // 최종 메시 최적화
-            foreach (var mesh in meshes)
-            {
-                if (mesh.vertexCount > 0)
-                {
-                    mesh.RecalculateNormals();
-                    mesh.RecalculateBounds();
-                }
-            }
+            secondaryMesh.RecalculateBounds();
+            meshes.Add(secondaryMesh);
 
             return meshes;
+        }
+
+        /// <summary>
+        /// 평면 유형에 따른 Up 벡터 반환
+        /// </summary>
+        private Vector3 GetUpVector()
+        {
+            switch (_cylinderPlane)
+            {
+                case PlaneType.YX:
+                    return Vector3.up; // Z축 파이프는 Y를 Up으로
+                case PlaneType.XZ:
+                    return Vector3.forward; // Y축 파이프는 Z를 Up으로
+                case PlaneType.YZ:
+                    return Vector3.up; // X축 파이프는 Y를 Up으로
+                default:
+                    return Vector3.up;
+            }
+        }
+
+        /// <summary>
+        /// 평면 유형에 따른 Forward 벡터 반환
+        /// </summary>
+        private Vector3 GetForwardVector()
+        {
+            switch (_cylinderPlane)
+            {
+                case PlaneType.YX:
+                    return Vector3.forward; // Z축 방향
+                case PlaneType.XZ:
+                    return Vector3.up; // Y축 방향
+                case PlaneType.YZ:
+                    return Vector3.right; // X축 방향
+                default:
+                    return Vector3.forward;
+            }
+        }
+
+        /// <summary>
+        /// 메시에 콜라이더를 설정합니다.
+        /// </summary>
+        public static void SetupCollider(GameObject gameObject, Mesh mesh, bool isConvex = true)
+        {
+            MeshCollider meshCollider = gameObject.GetComponent<MeshCollider>();
+            if (meshCollider == null)
+                meshCollider = gameObject.AddComponent<MeshCollider>();
+                
+            meshCollider.sharedMesh = mesh;
+            
+            // Convex 옵션 활성화 - 물리 시뮬레이션을 빠르고 안정적으로 만듭니다
+            meshCollider.convex = isConvex;
+            
+            // Cooking Options 설정 (Unity 2020.1 이상)
+            #if UNITY_2020_1_OR_NEWER
+            meshCollider.cookingOptions = MeshColliderCookingOptions.CookForFasterSimulation 
+                                        | MeshColliderCookingOptions.EnableMeshCleaning
+                                        | MeshColliderCookingOptions.WeldColocatedVertices;
+            #endif
         }
 
         private void ClearMeshInfo()
@@ -192,157 +285,64 @@ namespace InstantPipes
             _triIndices = new List<int>();
             _bezierPoints = new List<BezierPoint>();
             _planes = new List<PlaneInfo>();
-            _currentAngleOffset = 0f; // Reset angle offset
         }
 
         private BezierPoint GetBezierPoint(float t, int x)
         {
-            // Validate indices to prevent out-of-range errors
-            if (x < 1 || x >= Points.Count - 1)
-            {
-                Debug.LogError($"Invalid point index {x} for pipe with {Points.Count} points");
-                // Return a default point with the previous rotation if possible
-                return new BezierPoint(
-                    Points[Mathf.Clamp(x, 0, Points.Count - 1)], 
-                    _previousRotation != Quaternion.identity ? _previousRotation : Quaternion.identity
-                );
-            }
-
             Vector3 prev, next;
-            float minSegmentLength = 0.01f; // Minimum segment length to avoid numerical issues
 
-            // Calculate previous point with better curvature handling
-            Vector3 toPrev = Points[x] - Points[x - 1];
-            float prevDist = toPrev.magnitude;
-            
-            if (prevDist < minSegmentLength)
-            {
-                // Points are too close, use a small offset
-                prev = Points[x] + (x > 1 ? (Points[x-2] - Points[x-1]).normalized : Vector3.forward) * minSegmentLength;
-                Debug.LogWarning($"Pipe segment {x-1}->{x} is too short ({prevDist}), using minimal offset");
-            }
-            else if (prevDist > _generator.Curvature * 2 + _ringThickness)
-            {
-                prev = Points[x] - toPrev.normalized * _generator.Curvature;
-            }
+            if ((Points[x] - Points[x - 1]).magnitude > _generator.Curvature * 2 + _ringThickness)
+                prev = Points[x] - (Points[x] - Points[x - 1]).normalized * _generator.Curvature;
             else
-            {
-                prev = (Points[x] + Points[x - 1]) / 2 + toPrev.normalized * _ringThickness / 2;
-            }
+                prev = (Points[x] + Points[x - 1]) / 2 + (Points[x] - Points[x - 1]).normalized * _ringThickness / 2;
 
-            // Calculate next point with better curvature handling
-            Vector3 toNext = Points[x] - Points[x + 1];
-            float nextDist = toNext.magnitude;
-            
-            if (nextDist < minSegmentLength)
-            {
-                // Points are too close, use a small offset
-                next = Points[x] + (x < Points.Count - 2 ? (Points[x+2] - Points[x+1]).normalized : Vector3.forward) * minSegmentLength;
-                Debug.LogWarning($"Pipe segment {x}->{x+1} is too short ({nextDist}), using minimal offset");
-            }
-            else if (nextDist > _generator.Curvature * 2 + _ringThickness)
-            {
-                next = Points[x] - toNext.normalized * _generator.Curvature;
-            }
+            if ((Points[x] - Points[x + 1]).magnitude > _generator.Curvature * 2 + _ringThickness)
+                next = Points[x] - (Points[x] - Points[x + 1]).normalized * _generator.Curvature;
             else
-            {
-                next = (Points[x] + Points[x + 1]) / 2 + toNext.normalized * _ringThickness / 2;
-            }
+                next = (Points[x] + Points[x + 1]) / 2 + (Points[x] - Points[x + 1]).normalized * _ringThickness / 2;
 
-            // Special handling for start and end segments
             if (x == 1)
             {
-                if (prevDist > _generator.Curvature + _ringThickness * 2.5f)
-                    prev = Points[x] - toPrev.normalized * _generator.Curvature;
+                if ((Points[x] - Points[x - 1]).magnitude > _generator.Curvature + _ringThickness * 2.5f)
+                    prev = Points[x] - (Points[x] - Points[x - 1]).normalized * _generator.Curvature;
                 else
-                    prev = Points[x - 1] + toPrev.normalized * _ringThickness * 2.5f;
-            }
-            else if (x == Points.Count - 2)
-            {
-                if (nextDist > _generator.Curvature + _ringThickness * 2.5f)
-                    next = Points[x] - toNext.normalized * _generator.Curvature;
-                else
-                    next = Points[x + 1] + toNext.normalized * _ringThickness * 2.5f;
+                    prev = Points[x - 1] + (Points[x] - Points[x - 1]).normalized * _ringThickness * 2.5f;
             }
 
-            // Compute Bezier curve path
+            else if (x == Points.Count - 2)
+            {
+                if ((Points[x] - Points[x + 1]).magnitude > _generator.Curvature + _ringThickness * 2.5f)
+                    next = Points[x] - (Points[x] - Points[x + 1]).normalized * _generator.Curvature;
+                else
+                    next = Points[x + 1] + (Points[x] - Points[x + 1]).normalized * _ringThickness * 2.5f;
+            }
+
             Vector3 a = Vector3.Lerp(prev, Points[x], t);
             Vector3 b = Vector3.Lerp(Points[x], next, t);
             var position = Vector3.Lerp(a, b, t);
 
-            // Compute tangent and up vectors for rotation
-            Vector3 tangent = Vector3.zero;
-            
-            // Ensure we have valid offset for next point calculation
-            float tOffset = Mathf.Min(t + 0.001f, 1.0f);
-            if (tOffset <= t) tOffset = t + 0.001f; // Force a small offset if we're at 1.0
-            
-            Vector3 aNext = Vector3.LerpUnclamped(prev, Points[x], tOffset);
-            Vector3 bNext = Vector3.LerpUnclamped(Points[x], next, tOffset);
-            Vector3 nextPosition = Vector3.Lerp(aNext, bNext, tOffset);
-            
-            // Calculate forward direction
-            Vector3 forward = (nextPosition - position).normalized;
-            if (forward.magnitude < 0.001f) // If direction is too small, use previous direction
-            {
-                forward = _previousRotation * Vector3.forward;
-            }
-            
-            // 개선된 업 벡터 계산 방식 적용
-            Vector3 upVector = DetermineUpVector(forward);
-            
-            // Use LookRotation with our specified up vector
-            Quaternion targetRotation = Quaternion.LookRotation(forward, upVector);
-            
-            // Calculate cross product for tangent
-            tangent = Vector3.Cross(a - b, aNext - bNext);
-            if (tangent.magnitude > 0.001f)
-            {
-                tangent.Normalize();
-                // Refine rotation using our tangent
-                targetRotation = Quaternion.LookRotation(forward, tangent);
-            }
+            Vector3 aNext = Vector3.LerpUnclamped(prev, Points[x], t + 0.001f);
+            Vector3 bNext = Vector3.LerpUnclamped(Points[x], next, t + 0.001f);
 
-            // Maintain consistent rotation along the pipe by gradually adjusting
+            var tangent = Vector3.Cross(a - b, aNext - bNext);
+            
+            // 평면 타입에 따라 적절한 up 벡터 적용
+            Vector3 upVector = GetUpVector();
+            
+            var rotation = (a != b) ? Quaternion.LookRotation((a - b).normalized, tangent != Vector3.zero ? tangent.normalized : upVector) : Quaternion.identity;
+
+            // Rotate new tangent along the forward axis to match the previous part
             if (t == 0)
             {
-                // Calculate the correct angle offset to maintain consistency
-                float angle = Quaternion.Angle(_previousRotation, targetRotation);
-                
-                // Find axis of rotation
-                Vector3 axis = Vector3.Cross(_previousRotation * Vector3.forward, targetRotation * Vector3.forward);
-                if (axis.magnitude > 0.001f)
-                {
-                    axis.Normalize();
-                    // Project axis onto forward vector to get rotation around pipe
-                    float dotProduct = Vector3.Dot(axis, forward);
-                    _currentAngleOffset = angle * dotProduct;
-                    
-                    // Handle inverted rotation
-                    if (Quaternion.Angle(targetRotation * Quaternion.AngleAxis(_currentAngleOffset, forward), _previousRotation) > 
-                        Quaternion.Angle(targetRotation * Quaternion.AngleAxis(-_currentAngleOffset, forward), _previousRotation))
-                    {
-                        _currentAngleOffset = -_currentAngleOffset;
-                    }
-                }
-                else
-                {
-                    // Default to zero if we can't determine the axis
-                    _currentAngleOffset = 0;
-                }
+                _currentAngleOffset = Quaternion.Angle(_previousRotation, rotation);
+                var offsetRotation = Quaternion.AngleAxis(_currentAngleOffset, GetForwardVector());
+                if (Quaternion.Angle(rotation * offsetRotation, _previousRotation) > 0)
+                    _currentAngleOffset *= -1;
             }
-            
-            // Apply consistent rotation
-            targetRotation *= Quaternion.AngleAxis(_currentAngleOffset, forward);
-            
-            // Blend with previous rotation for smoother transitions
-            if (_previousRotation != Quaternion.identity)
-            {
-                targetRotation = Quaternion.Slerp(_previousRotation, targetRotation, 0.3f);
-            }
+            rotation *= Quaternion.AngleAxis(_currentAngleOffset, GetForwardVector());
 
-            _previousRotation = targetRotation;
-            return new BezierPoint(position, targetRotation);
+            _previousRotation = rotation;
+            return new BezierPoint(position, rotation);
         }
 
         private void GenerateUVs()
@@ -369,24 +369,35 @@ namespace InstantPipes
         {
             for (int point = 0; point < _bezierPoints.Count; point++)
             {
-                // 각 점에서 로컬 좌표계 기준 원 생성
+                // 선택된 평면에 따라 정다각형 생성
                 for (int i = 0; i < _generator.EdgeCount; i++)
                 {
                     float t = i / (float)_generator.EdgeCount;
-                    float angRad = t * 6.2831853f; // 2π
+                    float angRad = t * 6.2831853f;
                     
-                    // 원형 좌표 생성 (XY 평면 상의 원)
-                    Vector3 direction = new Vector3(Mathf.Sin(angRad), Mathf.Cos(angRad), 0);
+                    // 선택된 평면에 따라 방향 벡터 계산
+                    Vector3 direction;
+                    if (_cylinderPlane == PlaneType.YX)
+                    {
+                        // Y-X 평면 (원래 방식): Z축이 파이프 길이 방향
+                        direction = new Vector3(Mathf.Sin(angRad), Mathf.Cos(angRad), 0);
+                    }
+                    else if (_cylinderPlane == PlaneType.XZ)
+                    {
+                        // X-Z 평면 (Y축이 높이): Y축이 파이프 길이 방향
+                        direction = new Vector3(Mathf.Sin(angRad), 0, Mathf.Cos(angRad));
+                    }
+                    else // PlaneType.YZ
+                    {
+                        // Y-Z 평면 (X축이 길이): X축이 파이프 길이 방향
+                        direction = new Vector3(0, Mathf.Sin(angRad), Mathf.Cos(angRad));
+                    }
                     
-                    // 방향 벡터를 구한 노멀을 통해 파이프 반지름 계산
-                    float radius = isExtruded ? _generator.RingRadius + _generator.Radius : _generator.Radius;
-                    
-                    // 노멀과 정점 계산 (원을 현재 방향에 맞게 회전)
-                    _normals.Add(_bezierPoints[point].LocalToWorldVector(-direction.normalized));
-                    _verts.Add(_bezierPoints[point].LocalToWorldPosition(direction * radius));
+                    _normals.Add(_bezierPoints[point].LocalToWorldVector(direction.normalized));
+                    _verts.Add(_bezierPoints[point].LocalToWorldPosition(direction * (isExtruded ? _generator.RingRadius + _generator.Radius : _generator.Radius)));
                 }
 
-                // 원의 마지막 정점 (첫 정점과 동일하게 처리)
+                // 마지막 정점과 첫 정점이 연결되도록 첫 번째 정점을 다시 추가
                 _normals.Add(_normals[_normals.Count - _generator.EdgeCount]);
                 _verts.Add(_verts[_verts.Count - _generator.EdgeCount]);
             }
@@ -402,82 +413,117 @@ namespace InstantPipes
 
                 int rootIndex = s * edges;
                 int rootIndexNext = (s + 1) * edges;
-                for (int i = 0; i < edges; i++)
+                
+                // 원통 측면의 삼각형 생성
+                for (int i = 0; i < _generator.EdgeCount; i++)
                 {
                     int currentA = rootIndex + i;
-                    int currentB = rootIndex + (i + 1) % edges;
+                    int currentB = rootIndex + (i + 1) % edges; // 마지막 정점과 첫 정점 연결
                     int nextA = rootIndexNext + i;
-                    int nextB = rootIndexNext + (i + 1) % edges;
+                    int nextB = rootIndexNext + (i + 1) % edges; // 마지막 정점과 첫 정점 연결
 
-                    _triIndices.Add(currentA);
+                    // 사각형을 두 개의 삼각형으로 분할 (시계 방향으로 면이 바깥쪽을 향하게)
+                    _triIndices.Add(nextB);
                     _triIndices.Add(nextA);
+                    _triIndices.Add(currentA);
+                    
+                    _triIndices.Add(currentB);
                     _triIndices.Add(nextB);
                     _triIndices.Add(currentA);
-                    _triIndices.Add(nextB);
-                    _triIndices.Add(currentB);
                 }
             }
         }
 
-        private void GenerateDisc(BezierPoint point)
+        private void GenerateDisc(BezierPoint point, bool isCap = false)
         {
             var rootIndex = _verts.Count;
             bool isFirst = (point.Pos == _bezierPoints[0].Pos);
             bool isLast = (point.Pos == _bezierPoints[_bezierPoints.Count - 1].Pos);
 
-            // 위치 조정
+            // 평면 유형에 따른 Forward 벡터 사용
+            Vector3 forwardVector = GetForwardVector();
+
             if (isFirst)
-                point.Pos -= point.LocalToWorldVector(Vector3.forward) * (_generator.CapThickness + _generator.CapOffset);
+                point.Pos -= point.LocalToWorldVector(forwardVector) * (_generator.CapThickness + _generator.CapOffset);
             else if (isLast)
-                point.Pos += point.LocalToWorldVector(Vector3.forward) * _generator.CapOffset;
+                point.Pos += point.LocalToWorldVector(forwardVector) * _generator.CapOffset;
             else
-                point.Pos -= point.LocalToWorldVector(Vector3.forward) * _ringThickness / 2;
+                point.Pos -= point.LocalToWorldVector(forwardVector) * _ringThickness / 2;
 
-            var radius = (isLast || isFirst) ? _generator.CapRadius + _generator.Radius : _generator.RingRadius + _generator.Radius;
-            var uv = (isLast || isFirst) ? _generator.CapThickness : _ringThickness;
+            var radius = (isCap || isLast || isFirst) ? _generator.CapRadius + _generator.Radius : _generator.RingRadius + _generator.Radius;
+            var uv = (isCap || isLast || isFirst) ? _generator.CapThickness : _ringThickness;
 
-            // 디스크의 앞/뒤면 생성
+            // 가운데 중심점 추가
+            Vector3 centerPos = point.Pos;
+            Vector3 centerNormal = isFirst ? point.LocalToWorldVector(-forwardVector) : point.LocalToWorldVector(forwardVector);
+            
             for (int p = 0; p < 2; p++)
             {
-                // 원형 정점 생성
+                // 정다각형의 각 정점 생성
                 for (int i = 0; i < _generator.EdgeCount; i++)
                 {
                     float t = i / (float)_generator.EdgeCount;
                     float angRad = t * 6.2831853f;
                     
-                    // 원형 좌표 (XY 평면 상의 원)
-                    Vector3 direction = new Vector3(Mathf.Sin(angRad), Mathf.Cos(angRad), 0);
+                    // 선택된 평면에 따라 방향 벡터 계산
+                    Vector3 direction;
+                    if (_cylinderPlane == PlaneType.YX)
+                    {
+                        // Y-X 평면 (원래 방식)
+                        direction = new Vector3(Mathf.Sin(angRad), Mathf.Cos(angRad), 0);
+                    }
+                    else if (_cylinderPlane == PlaneType.XZ)
+                    {
+                        // X-Z 평면 (Y축이 높이)
+                        direction = new Vector3(Mathf.Sin(angRad), 0, Mathf.Cos(angRad));
+                    }
+                    else // PlaneType.YZ
+                    {
+                        // Y-Z 평면 (X축이 길이)
+                        direction = new Vector3(0, Mathf.Sin(angRad), Mathf.Cos(angRad));
+                    }
                     
-                    // 노멀과 정점 계산
-                    _normals.Add(point.LocalToWorldVector(-direction.normalized));
+                    _normals.Add(point.LocalToWorldVector(direction.normalized));
                     _verts.Add(point.LocalToWorldPosition(direction * radius));
                     _uvs.Add(new Vector2(t, uv * p));
                 }
 
-                // 원의 마지막 정점 (첫 정점과 동일하게 처리)
+                // 마지막과 첫 번째 정점을 연결하기 위한 추가 정점
                 _normals.Add(_normals[_normals.Count - _generator.EdgeCount]);
                 _verts.Add(_verts[_verts.Count - _generator.EdgeCount]);
                 _uvs.Add(new Vector2(1, uv * p));
 
-                _planes.Add(new PlaneInfo(point, radius, p == 0));
+                // 중간 링은 평면 정보에 추가하지 않음 (캡만 추가)
+                if (isCap || isFirst || isLast)
+                {
+                    _planes.Add(new PlaneInfo(point, radius, p == 0));
+                }
 
-                // 다음 링을 위한 위치 조정
+                // 다음 층 위치로 이동
                 if (isLast || isFirst)
-                    point.Pos += point.LocalToWorldVector(Vector3.forward) * _generator.CapThickness;
+                    point.Pos += point.LocalToWorldVector(forwardVector) * _generator.CapThickness;
                 else
-                    point.Pos += point.LocalToWorldVector(Vector3.forward) * _ringThickness;
+                    point.Pos += point.LocalToWorldVector(forwardVector) * _ringThickness;
             }
 
-            // 원통 면의 삼각형 생성
             var edges = _generator.EdgeCount + 1;
-            for (int i = 0; i < edges; i++)
+
+            // 디스크의 테두리 부분 생성
+            for (int i = 0; i < _generator.EdgeCount; i++)
             {
-                _triIndices.Add(edges + (i + 1) % edges + rootIndex);
-                _triIndices.Add(edges + i + rootIndex);
-                _triIndices.Add(i + rootIndex);
-                _triIndices.Add((i + 1) % edges + rootIndex);
-                _triIndices.Add(edges + (i + 1) % edges + rootIndex);
-                _triIndices.Add(i + rootIndex);
+                int current = i + rootIndex;
+                int next = (i + 1) % _generator.EdgeCount + rootIndex;
+                int topCurrent = i + edges + rootIndex;
+                int topNext = (i + 1) % _generator.EdgeCount + edges + rootIndex;
+                
+                // 사각형을 두 개의 삼각형으로 분할
+                _triIndices.Add(current);
+                _triIndices.Add(topCurrent);
+                _triIndices.Add(topNext);
+                
+                _triIndices.Add(current);
+                _triIndices.Add(topNext);
+                _triIndices.Add(next);
             }
         }
 
@@ -486,100 +532,106 @@ namespace InstantPipes
             var edges = _generator.EdgeCount + 1;
             var rootIndex = _verts.Count;
 
+            // 평면 유형에 따른 Forward 벡터 사용
+            Vector3 forwardVector = GetForwardVector();
+
+            // 평면 중심점 추가
+            Vector3 centerPos = plane.Point.Pos;
+            _verts.Add(centerPos);
+            Vector3 faceNormal = plane.IsForward ? plane.Point.LocalToWorldVector(forwardVector) : plane.Point.LocalToWorldVector(-forwardVector);
+            _normals.Add(faceNormal);
+            _uvs.Add(new Vector2(0.5f, 0.5f)); // 중심점 UV
+
             var planePointVectors = new List<Vector3>();
 
-            for (int p = 0; p < 2; p++)
+            // 선택된 평면에 따라 정점 생성
+            for (int i = 0; i < _generator.EdgeCount; i++)
             {
-                for (int i = 0; i < _generator.EdgeCount; i++)
+                float t = i / (float)_generator.EdgeCount;
+                float angRad = t * 6.2831853f;
+                
+                // 선택된 평면에 따라 방향 벡터 계산
+                Vector3 direction;
+                if (_cylinderPlane == PlaneType.YX)
                 {
-                    float t = i / (float)_generator.EdgeCount;
-                    float angRad = t * 6.2831853f;
-                    Vector3 direction = new Vector3(Mathf.Sin(angRad), Mathf.Cos(angRad), 0);
-                    planePointVectors.Add(direction);
+                    // Y-X 평면 (원래 방식)
+                    direction = new Vector3(Mathf.Sin(angRad), Mathf.Cos(angRad), 0);
                 }
-                planePointVectors.Add(planePointVectors[planePointVectors.Count - 1]);
+                else if (_cylinderPlane == PlaneType.XZ)
+                {
+                    // X-Z 평면 (Y축이 높이)
+                    direction = new Vector3(Mathf.Sin(angRad), 0, Mathf.Cos(angRad));
+                }
+                else // PlaneType.YZ
+                {
+                    // Y-Z 평면 (X축이 길이)
+                    direction = new Vector3(0, Mathf.Sin(angRad), Mathf.Cos(angRad));
+                }
+                
+                planePointVectors.Add(direction);
+                
+                // 각 정점 추가
+                Vector3 vertPos = plane.Point.LocalToWorldPosition(direction * plane.Radius);
+                _verts.Add(vertPos);
+                _normals.Add(faceNormal);
+                
+                // UV 계산
+                Vector2 uvCoord;
+                if (_cylinderPlane == PlaneType.YX)
+                {
+                    uvCoord = new Vector2((direction.x + 1) * 0.5f, (direction.y + 1) * 0.5f);
+                }
+                else if (_cylinderPlane == PlaneType.XZ)
+                {
+                    uvCoord = new Vector2((direction.x + 1) * 0.5f, (direction.z + 1) * 0.5f);
+                }
+                else // PlaneType.YZ
+                {
+                    uvCoord = new Vector2((direction.y + 1) * 0.5f, (direction.z + 1) * 0.5f);
+                }
+                _uvs.Add(uvCoord * _generator.RingsUVScale);
             }
-
-            for (int i = 0; i < planePointVectors.Count; i++)
+            
+            // 마지막 정점 다시 추가하여 원을 닫음
+            Vector3 firstDirection = planePointVectors[0];
+            Vector3 lastVertPos = plane.Point.LocalToWorldPosition(firstDirection * plane.Radius);
+            _verts.Add(lastVertPos);
+            _normals.Add(faceNormal);
+            
+            // UV 계산
+            Vector2 lastUvCoord;
+            if (_cylinderPlane == PlaneType.YX)
             {
-                _verts.Add(plane.Point.LocalToWorldPosition(planePointVectors[i] * plane.Radius));
-                if (i > _generator.EdgeCount)
-                    _normals.Add(plane.Point.LocalToWorldVector(plane.IsForward ? Vector3.back : Vector3.forward));
-                else
-                    _normals.Add(plane.Point.LocalToWorldVector(plane.IsForward ? Vector3.forward : Vector3.back));
-                _uvs.Add(planePointVectors[i] * _generator.RingsUVScale);
+                lastUvCoord = new Vector2((firstDirection.x + 1) * 0.5f, (firstDirection.y + 1) * 0.5f);
             }
+            else if (_cylinderPlane == PlaneType.XZ)
+            {
+                lastUvCoord = new Vector2((firstDirection.x + 1) * 0.5f, (firstDirection.z + 1) * 0.5f);
+            }
+            else // PlaneType.YZ
+            {
+                lastUvCoord = new Vector2((firstDirection.y + 1) * 0.5f, (firstDirection.z + 1) * 0.5f);
+            }
+            _uvs.Add(lastUvCoord * _generator.RingsUVScale);
 
-            for (int i = 1; i < edges - 1; i++)
+            // 평면의 삼각형 인덱스 생성 (부채꼴 형태)
+            for (int i = 0; i < _generator.EdgeCount; i++)
             {
                 if (plane.IsForward)
                 {
-                    _triIndices.Add(i + 1 + rootIndex);
-                    _triIndices.Add(i + rootIndex);
-                    _triIndices.Add(0 + rootIndex);
+                    // 시계 방향 (면이 앞쪽을 향함)
+                    _triIndices.Add(rootIndex); // 중심점
+                    _triIndices.Add(rootIndex + i + 1);
+                    _triIndices.Add(rootIndex + ((i + 1) % _generator.EdgeCount) + 1);
                 }
                 else
                 {
-                    _triIndices.Add(edges + rootIndex);
-                    _triIndices.Add(edges + i + rootIndex);
-                    _triIndices.Add(edges + i + 1 + rootIndex);
+                    // 반시계 방향 (면이 뒤쪽을 향함)
+                    _triIndices.Add(rootIndex); // 중심점
+                    _triIndices.Add(rootIndex + ((i + 1) % _generator.EdgeCount) + 1);
+                    _triIndices.Add(rootIndex + i + 1);
                 }
             }
-        }
-
-        // 방향에 따른 적절한 업 벡터 결정 메서드 추가
-        private Vector3 DetermineUpVector(Vector3 direction)
-        {
-            // 정규화된 방향
-            Vector3 normalizedDir = direction.normalized;
-            
-            // 방향 벡터의 절대값 계산
-            float absX = Mathf.Abs(normalizedDir.x);
-            float absY = Mathf.Abs(normalizedDir.y);
-            float absZ = Mathf.Abs(normalizedDir.z);
-            
-            // 기본 업 벡터
-            Vector3 upVector = Vector3.up;
-            
-            // 방향이 어느 축과 가장 정렬되어 있는지 확인
-            if (absY > absX && absY > absZ)
-            {
-                // Y축과 정렬 - Z축을 업 벡터로 사용
-                upVector = normalizedDir.y > 0 ? Vector3.forward : Vector3.back;
-            }
-            else if (absZ > absX && absZ > absY)
-            {
-                // Z축과 정렬 - Y축을 업 벡터로 사용
-                upVector = Vector3.up;
-            }
-            else
-            {
-                // X축과 정렬 - Y축을 업 벡터로 사용
-                // 만약 X축과 Y축이 모두 정렬되어 있다면 Z축 사용
-                if (absY > 0.9f)
-                {
-                    upVector = Vector3.forward;
-                }
-            }
-            
-            // 방향 벡터와 업 벡터가 거의 평행한 경우 다른 벡터 선택
-            if (Mathf.Abs(Vector3.Dot(normalizedDir, upVector)) > 0.9f)
-            {
-                if (upVector == Vector3.up || upVector == Vector3.down)
-                {
-                    upVector = Vector3.forward;
-                }
-                else if (upVector == Vector3.forward || upVector == Vector3.back)
-                {
-                    upVector = Vector3.up;
-                }
-                else
-                {
-                    upVector = Vector3.right;
-                }
-            }
-            
-            return upVector;
         }
 
         private struct BezierPoint
@@ -594,9 +646,7 @@ namespace InstantPipes
             }
 
             public Vector3 LocalToWorldPosition(Vector3 localSpacePos) => Rot * localSpacePos + Pos;
-            
-            // 수정된 벡터 변환 메서드 (회전만 적용, 위치 변환 없음)
-            public Vector3 LocalToWorldVector(Vector3 localSpaceVec) => Rot * localSpaceVec;
+            public Vector3 LocalToWorldVector(Vector3 localSpacePos) => Rot * localSpacePos;
         }
 
         private struct PlaneInfo

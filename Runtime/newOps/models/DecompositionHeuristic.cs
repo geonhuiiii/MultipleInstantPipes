@@ -9,11 +9,11 @@ namespace Model
     public class DecompositionHeuristic : AStar
     {
         public int MaxIt;
-        public List<( (float[], string), (float[], string), float, float )> Pipes;
+        public List<( (Vector3, string), (Vector3, string), float, float )> Pipes;
         public int NPipes;
         public List<HashSet<(string, string)>> CoveringListN;
-        public List<List<(float[], string)>> PathN;
-        public List<List<(float[], string)>> BendPointsN;
+        public List<List<(Vector3, string)>> PathN;
+        public List<List<(Vector3, string)>> BendPointsN;
 
         public DecompositionHeuristic(
             int maxit,
@@ -24,12 +24,39 @@ namespace Model
         ) : base(spaceCoords, obstacleCoords, wPath, wBend, wEnergy, minDisBend)
         {
             MaxIt = maxit;
-            Pipes = pipes;
+            // 파이프 리스트 변환
+            Pipes = new List<((Vector3, string), (Vector3, string), float, float)>();
+            foreach (var pipe in pipes)
+            {
+                Pipes.Add((
+                    (FloatArrayToVector3(pipe.Item1.Item1), pipe.Item1.Item2),
+                    (FloatArrayToVector3(pipe.Item2.Item1), pipe.Item2.Item2),
+                    pipe.Item3,
+                    pipe.Item4
+                ));
+            }
             NPipes = pipes.Count;
         }
 
+        // float[] 배열을 Vector3로 변환하는 헬퍼 메서드 (AStar에서 상속받았을 수 있으나 명시적으로 재추가)
+        private Vector3 FloatArrayToVector3(float[] array)
+        {
+            if (array == null || array.Length < 3)
+            {
+                return Vector3.zero;
+            }
+            // X, Y, Z 순서를 유지하되, 2D인 경우 Z 좌표 사용
+            return new Vector3(array[0], array.Length > 2 ? array[1] : 0, array.Length > 2 ? array[2] : array[1]);
+        }
+
+        // Vector3를 float[] 배열로 변환하는 헬퍼 메서드 (AStar에서 상속받았을 수 있으나 명시적으로 재추가)
+        private float[] Vector3ToFloatArray(Vector3 vector)
+        {
+            return new float[] { vector.x, vector.y, vector.z };
+        }
+
         // 경로의 커버링 리스트 생성
-        public HashSet<(string, string)> GetCoveringList(List<(float[], string)> path, float radius = 1, float delta = 0)
+        public HashSet<(string, string)> GetCoveringList(List<(Vector3, string)> path, float radius = 1, float delta = 0)
         {
             // Check if path is null or empty
             if (path == null || path.Count == 0)
@@ -38,15 +65,15 @@ namespace Model
             }
             
             var Pk = path.Select(item => item.Item1).ToList();
-            var Lk = new List<float[]>(Pk);
+            var Lk = new List<Vector3>(Pk);
             foreach (var v0 in Pk)
             {
                 foreach (var v in Lk.ToList())
                 {
                     foreach (var dir in Directions)
                     {
-                        var vPrime = Functions.TupleOperations(v, dir.Item1, "+");
-                        if (IsInOpenSet(vPrime) && GetMaxDistance(v0, vPrime) <= radius + delta && !Lk.Any(x => x.SequenceEqual(vPrime)))
+                        Vector3 vPrime = v + dir.Item1;
+                        if (IsInOpenSet(vPrime) && GetMaxDistance(v0, vPrime) <= radius + delta && !Lk.Any(x => x == vPrime))
                         {
                             Lk.Add(vPrime);
                         }
@@ -56,12 +83,12 @@ namespace Model
             var result = new HashSet<(string, string)>();
             foreach (var v in Lk)
                 foreach (var dir in Directions)
-                    result.Add((string.Join(",", v), dir.Item2));
+                    result.Add(($"{v.x},{v.y},{v.z}", dir.Item2));
             return result;
         }
 
         // 두 경로의 커버링 리스트 교집합(충돌 엣지)
-        public List<(string, string)> FindConflictEdges(List<(float[], string)> path1, List<(float[], string)> path2)
+        public List<(string, string)> FindConflictEdges(List<(Vector3, string)> path1, List<(Vector3, string)> path2)
         {
             var cov1 = GetCoveringList(path1);
             var cov2 = GetCoveringList(path2);
@@ -69,19 +96,20 @@ namespace Model
         }
 
         // 두 좌표의 최대 거리
-        public static float GetMaxDistance(float[] p1, float[] p2)
+        public static float GetMaxDistance(Vector3 p1, Vector3 p2)
         {
             float res = 0;
-            for (int i = 0; i < p1.Length; i++)
-                res = Math.Max(res, Math.Abs(p1[i] - p2[i]));
+            res = Mathf.Max(res, Mathf.Abs(p1.x - p2.x));
+            res = Mathf.Max(res, Mathf.Abs(p1.y - p2.y));
+            res = Mathf.Max(res, Mathf.Abs(p1.z - p2.z));
             return res;
         }
 
         // 메인 실행 
-        public (List<List<(float[], string)>> pathN, List<List<(float[], string)>> bendPointsN) MainRun()
+        public (List<List<(Vector3, string)>> pathN, List<List<(Vector3, string)>> bendPointsN) MainRun()
         {
-            PathN = new List<List<(float[], string)>>();
-            BendPointsN = new List<List<(float[], string)>>();
+            PathN = new List<List<(Vector3, string)>>();
+            BendPointsN = new List<List<(Vector3, string)>>();
             CoveringListN = new List<HashSet<(string, string)>>();
             
             // 첫 번째 단계: 모든 파이프에 대한 초기 경로 생성
@@ -136,13 +164,13 @@ namespace Model
                     int gridSize = 1;
                     
                     // 시작점과 끝점을 포함하는 그리드 셀 계산
-                    int startX = (int)(startPoint[0] / gridSize);
-                    int startY = (int)(startPoint[1] / gridSize);
-                    int startZ = startPoint.Length > 2 ? (int)(startPoint[2] / gridSize) : 0;
+                    int startX = (int)(startPoint.x / gridSize);
+                    int startY = (int)(startPoint.y / gridSize);
+                    int startZ = startPoint.z > 0 ? (int)(startPoint.z / gridSize) : 0;
                     
-                    int endX = (int)(endPoint[0] / gridSize);
-                    int endY = (int)(endPoint[1] / gridSize);
-                    int endZ = endPoint.Length > 2 ? (int)(endPoint[2] / gridSize) : 0;
+                    int endX = (int)(endPoint.x / gridSize);
+                    int endY = (int)(endPoint.y / gridSize);
+                    int endZ = endPoint.z > 0 ? (int)(endPoint.z / gridSize) : 0;
                     
                     // 두 점 사이의 모든 그리드 셀 계산 (간단한 방식으로 직선 보간)
                     int minX = Math.Min(startX, endX);
@@ -358,8 +386,8 @@ namespace Model
                     var lastPathCoord = PathN[i][PathN[i].Count - 1].Item1;
                     
                     // 시작점과 끝점이 연결되어 있는지 확인
-                    bool startConnected = firstPathCoord.SequenceEqual(startCoord);
-                    bool endConnected = lastPathCoord.SequenceEqual(endCoord);
+                    bool startConnected = firstPathCoord == startCoord;
+                    bool endConnected = lastPathCoord == endCoord;
                     
                     if (!startConnected || !endConnected)
                     {
@@ -367,7 +395,7 @@ namespace Model
                         
                         // 경로 복구 시도
                         var pipe = Pipes[i];
-                        var fixedPath = new List<(float[], string)>(PathN[i]);
+                        var fixedPath = new List<(Vector3, string)>(PathN[i]);
                         
                         // 시작점 연결이 잘못된 경우 수정
                         if (!startConnected)
@@ -399,24 +427,24 @@ namespace Model
         }
         
         // 직선 경로 생성
-        private List<(float[], string)> CreateStraightPath(
-            (float[], string) start, 
-            (float[], string) end)
+        private List<(Vector3, string)> CreateStraightPath(
+            (Vector3, string) start, 
+            (Vector3, string) end)
         {
-            var path = new List<(float[], string)>();
+            var path = new List<(Vector3, string)>();
             
             // 시작점 추가
             path.Add(start);
             
             // 직선 경로를 위한 중간 점 계산 (필요시)
-            if (!start.Item1.SequenceEqual(end.Item1))
+            if (start.Item1 != end.Item1)
             {
                 // 중간 점 생성 (시작점과 끝점의 중간)
-                float[] midPoint = new float[start.Item1.Length];
-                for (int i = 0; i < start.Item1.Length; i++)
-                {
-                    midPoint[i] = (start.Item1[i] + end.Item1[i]) / 2;
-                }
+                Vector3 midPoint = new Vector3(
+                    (start.Item1.x + end.Item1.x) / 2,
+                    (start.Item1.y + end.Item1.y) / 2,
+                    (start.Item1.z + end.Item1.z) / 2
+                );
                 
                 string midDirection = GetDirectionFromPoints(start.Item1, end.Item1);
                 path.Add((midPoint, midDirection));
@@ -430,11 +458,11 @@ namespace Model
         }
         
         // 직선 굽힘 경로 생성
-        private List<(float[], string)> CreateStraightBendPath(
-            (float[], string) start, 
-            (float[], string) end)
+        private List<(Vector3, string)> CreateStraightBendPath(
+            (Vector3, string) start, 
+            (Vector3, string) end)
         {
-            var bendPath = new List<(float[], string)>();
+            var bendPath = new List<(Vector3, string)>();
             
             // 시작점과 끝점 추가
             bendPath.Add(start);
@@ -444,9 +472,9 @@ namespace Model
         }
         
         // 대체 경로 생성 시도
-        private List<(float[], string)> TryAlternativePath(
-            (float[], string) start, 
-            (float[], string) end, 
+        private List<(Vector3, string)> TryAlternativePath(
+            (Vector3, string) start, 
+            (Vector3, string) end, 
             float radius, 
             float delta)
         {
@@ -454,54 +482,36 @@ namespace Model
             
             // 다양한 전략으로 경로 생성 시도
             // 1. 중간 지점을 다르게 설정하여 우회 경로 시도
-            float[] startPoint = start.Item1;
-            float[] endPoint = end.Item1;
+            Vector3 startPoint = start.Item1;
+            Vector3 endPoint = end.Item1;
             
             // 방향 벡터 계산
-            float[] direction = new float[startPoint.Length];
-            for (int i = 0; i < startPoint.Length; i++)
-            {
-                direction[i] = endPoint[i] - startPoint[i];
-            }
+            Vector3 direction = endPoint - startPoint;
             
-            // 수직 방향 찾기 (간단하게 첫 번째 좌표 사용)
-            float[] perpendicular = new float[startPoint.Length];
-            perpendicular[0] = -direction[1]; // x와 y 교환
-            perpendicular[1] = direction[0];
-            
-            if (startPoint.Length > 2)
-            {
-                perpendicular[2] = 0; // z는 0으로 설정
-            }
+            // 수직 방향 찾기 (X-Z 평면 상에서 수직 방향)
+            // 이제 Y축을 높이로 사용하므로, X-Z 평면에서 수직 벡터 생성
+            Vector3 perpendicular = new Vector3(-direction.z, 0, direction.x);
             
             // 벡터 정규화
-            float length = 0;
-            for (int i = 0; i < perpendicular.Length; i++)
-            {
-                length += perpendicular[i] * perpendicular[i];
-            }
-            length = (float)Math.Sqrt(length);
+            float length = Mathf.Sqrt(perpendicular.x * perpendicular.x + perpendicular.z * perpendicular.z);
             
             if (length > 0)
             {
-                for (int i = 0; i < perpendicular.Length; i++)
-                {
-                    perpendicular[i] /= length;
-                }
+                perpendicular /= length;
             }
             
             // 오프셋 거리 설정 (반경의 몇 배)
             float offset = radius * 3;
             
-            // 새로운 중간 점 계산
-            float[] midPoint = new float[startPoint.Length];
-            for (int i = 0; i < startPoint.Length; i++)
-            {
-                midPoint[i] = (startPoint[i] + endPoint[i]) / 2 + perpendicular[i] * offset;
-            }
+            // 새로운 중간 점 계산 (Y축 높이는 유지)
+            Vector3 midPoint = new Vector3(
+                (startPoint.x + endPoint.x) / 2 + perpendicular.x * offset,
+                (startPoint.y + endPoint.y) / 2,
+                (startPoint.z + endPoint.z) / 2 + perpendicular.z * offset
+            );
             
             // 새 경로 생성
-            var newPath = new List<(float[], string)>();
+            var newPath = new List<(Vector3, string)>();
             
             // 시작점 추가
             newPath.Add(start);
@@ -519,39 +529,40 @@ namespace Model
         }
         
         // 두 점 사이의 방향을 문자열로 반환
-        private string GetDirectionFromPoints(float[] from, float[] to)
+        private string GetDirectionFromPoints(Vector3 from, Vector3 to)
         {
             // 두 점 간의 방향 벡터 계산
-            float[] diff = new float[from.Length];
-            float maxDiff = 0;
-            int maxDiffIndex = 0;
+            Vector3 diff = to - from;
             
-            for (int i = 0; i < from.Length; i++)
+            // 가장 큰 차이를 보이는 축의 방향 반환 (Y축을 높이로 처리)
+            float absX = Math.Abs(diff.x);
+            float absY = Math.Abs(diff.y);
+            float absZ = Math.Abs(diff.z);
+            
+            if (absX > absY && absX > absZ)
             {
-                diff[i] = to[i] - from[i];
-                if (Math.Abs(diff[i]) > Math.Abs(maxDiff))
-                {
-                    maxDiff = diff[i];
-                    maxDiffIndex = i;
-                }
+                // X축이 주요 방향
+                return diff.x > 0 ? "+x" : "-x";
             }
-            
-            // 가장 큰 차이를 보이는 축의 방향 반환
-            if (maxDiffIndex == 0) // X축
-                return maxDiff > 0 ? "+x" : "-x";
-            else if (maxDiffIndex == 1) // Y축
-                return maxDiff > 0 ? "+y" : "-y";
-            else // Z축
-                return maxDiff > 0 ? "+z" : "-z";
+            else if (absY > absX && absY > absZ)
+            {
+                // Y축이 주요 방향 (높이)
+                return diff.y > 0 ? "+y" : "-y";
+            }
+            else
+            {
+                // Z축이 주요 방향
+                return diff.z > 0 ? "+z" : "-z";
+            }
         }
         
         // 경로에서 굽힘 점 추출
-        private List<(float[], string)> ExtractBendPoints(List<(float[], string)> path)
+        private List<(Vector3, string)> ExtractBendPoints(List<(Vector3, string)> path)
         {
             if (path == null || path.Count < 2)
                 return path;
                 
-            var bendPoints = new List<(float[], string)>();
+            var bendPoints = new List<(Vector3, string)>();
             
             // 시작점 추가
             bendPoints.Add(path[0]);
@@ -580,7 +591,7 @@ namespace Model
         }
         
         // 최종 경로의 유효성 검증
-        private bool PathsEqual(List<(float[], string)> path1, List<(float[], string)> path2)
+        private bool PathsEqual(List<(Vector3, string)> path1, List<(Vector3, string)> path2)
         {
             if (path1 == null || path2 == null)
                 return path1 == path2;
@@ -590,7 +601,7 @@ namespace Model
             
             for (int i = 0; i < path1.Count; i++)
             {
-                if (!path1[i].Item1.SequenceEqual(path2[i].Item1) || path1[i].Item2 != path2[i].Item2)
+                if (path1[i].Item1 != path2[i].Item1 || path1[i].Item2 != path2[i].Item2)
                     return false;
             }
             
@@ -598,7 +609,7 @@ namespace Model
         }
         
         // 최종 경로의 유효성 검증
-        private void ApplyStrongerPenalty(int pipeIndex, List<(float[], string)> path1, List<(float[], string)> path2)
+        private void ApplyStrongerPenalty(int pipeIndex, List<(Vector3, string)> path1, List<(Vector3, string)> path2)
         {
             // 두 경로 간 충돌 엣지 찾기
             var conflictEdges = FindConflictEdges(path1, path2);
@@ -651,7 +662,7 @@ namespace Model
         }
         
         // 충돌에 기반하여 엣지 비용 업데이트
-        private void UpdateEdgeCostForCollision(int pipeIndex, List<(float[], string)> path1, List<(float[], string)> path2)
+        private void UpdateEdgeCostForCollision(int pipeIndex, List<(Vector3, string)> path1, List<(Vector3, string)> path2)
         {
             // 두 경로 간 충돌 엣지 찾기
             var conflictEdges = FindConflictEdges(path1, path2);
@@ -721,30 +732,14 @@ namespace Model
                 
                 foreach (var point in PathN[i])
                 {
-                    var coords = point.Item1;
-                    if (coords.Length >= 3)
-                    {
-                        pathPoints.Add(new Vector3(coords[0], coords[1], coords[2]));
-                    }
-                    else if (coords.Length == 2)
-                    {
-                        pathPoints.Add(new Vector3(coords[0], coords[1], 0));
-                    }
+                    pathPoints.Add(point.Item1);
                 }
                 
                 if (BendPointsN[i] != null)
                 {
                     foreach (var point in BendPointsN[i])
                     {
-                        var coords = point.Item1;
-                        if (coords.Length >= 3)
-                        {
-                            bendPoints.Add(new Vector3(coords[0], coords[1], coords[2]));
-                        }
-                        else if (coords.Length == 2)
-                        {
-                            bendPoints.Add(new Vector3(coords[0], coords[1], 0));
-                        }
+                        bendPoints.Add(point.Item1);
                     }
                 }
                 

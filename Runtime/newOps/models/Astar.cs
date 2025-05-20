@@ -11,17 +11,42 @@ namespace Model
         public float[][] SpaceCoords;
         public List<float[][]> ObstacleCoords;
         public int Dim;
-        public List<float[]> PhyVertex;
+        public List<Vector3> PhyVertex;
         public Dictionary<string, float> EdgeCost;
-        public List<(float[], string)> Directions;
+        public List<(Vector3, string)> Directions;
         public float WPath, WBend, WEnergy;
         public int MinDisBend;
         public Dictionary<string, float> OpenSet;
         public Dictionary<string, int> CloseSet;
         public Node Start;
         public float Radius, Delta;
+        public bool UseDiagonals = true; // 대각선 사용 여부를 제어하는 옵션
 
-        public AStar(float[][] spaceCoords, List<float[][]> obstacleCoords, float wPath, float wBend, float wEnergy, int minDisBend)
+        // float[] 배열을 Vector3로 변환하는 헬퍼 메서드
+        private Vector3 FloatArrayToVector3(float[] array)
+        {
+            if (array == null || array.Length < 3)
+            {
+                Debug.LogError("유효하지 않은 배열입니다. 기본 Vector3.zero 반환");
+                return Vector3.zero;
+            }
+            // X, Y, Z 순서를 유지하되, 2D인 경우 Z 좌표 사용
+            return new Vector3(array[0], array.Length > 2 ? array[1] : 0, array.Length > 2 ? array[2] : array[1]);
+        }
+
+        // Vector3를 float[] 배열로 변환하는 헬퍼 메서드
+        private float[] Vector3ToFloatArray(Vector3 vector)
+        {
+            return new float[] { vector.x, vector.y, vector.z };
+        }
+
+        // 두 Vector3 비교 메서드 (SequenceEqual 대신 사용)
+        private bool VectorsEqual(Vector3 v1, Vector3 v2)
+        {
+            return v1 == v2;
+        }
+
+        public AStar(float[][] spaceCoords, List<float[][]> obstacleCoords, float wPath, float wBend, float wEnergy, int minDisBend, bool useDiagonals = true)
         {
             SpaceCoords = spaceCoords;
             ObstacleCoords = obstacleCoords ?? new List<float[][]>();
@@ -29,6 +54,7 @@ namespace Model
             WBend = wBend;
             WEnergy = wEnergy;
             MinDisBend = minDisBend;
+            UseDiagonals = useDiagonals;
             Dim = 3;
             
             // 기본 공간 좌표 유효성 확인
@@ -37,6 +63,12 @@ namespace Model
             SetDirections();
             InitProperty();
             InitEdgeCost(1f);
+        }
+        
+        // 기존 생성자는 그대로 유지하고 호환성을 위해 UseDiagonals를 true로 설정
+        public AStar(float[][] spaceCoords, List<float[][]> obstacleCoords, float wPath, float wBend, float wEnergy, int minDisBend)
+            : this(spaceCoords, obstacleCoords, wPath, wBend, wEnergy, minDisBend, true)
+        {
         }
         
         // 공간 좌표 유효성 검사 및 수정
@@ -69,22 +101,65 @@ namespace Model
 
         public void SetDirections()
         {
-            Directions = new List<(float[], string)>();
+            Directions = new List<(Vector3, string)>();
             if (Dim == 3)
             {
-                Directions.Add((new float[] { 0, 1, 0 }, "+y"));
-                Directions.Add((new float[] { 0, -1, 0 }, "-y"));
-                Directions.Add((new float[] { 1, 0, 0 }, "+x"));
-                Directions.Add((new float[] { -1, 0, 0 }, "-x"));
-                Directions.Add((new float[] { 0, 0, 1 }, "+z"));
-                Directions.Add((new float[] { 0, 0, -1 }, "-z"));
+                // 기본 6방향 (상하좌우앞뒤)
+                Directions.Add((new Vector3(0, 1, 0), "+y"));  // 상
+                Directions.Add((new Vector3(0, -1, 0), "-y")); // 하
+                Directions.Add((new Vector3(1, 0, 0), "+x"));  // 오른쪽
+                Directions.Add((new Vector3(-1, 0, 0), "-x")); // 왼쪽
+                Directions.Add((new Vector3(0, 0, 1), "+z"));  // 앞
+                Directions.Add((new Vector3(0, 0, -1), "-z")); // 뒤
+                
+                // 대각선 방향 추가 (UseDiagonals가 true일 경우)
+                if (UseDiagonals && false)
+                {
+                    // X-Y 평면 대각선 (4개)
+                    Directions.Add((new Vector3(1, 1, 0), "+x+y"));   // 우상
+                    Directions.Add((new Vector3(-1, 1, 0), "-x+y"));  // 좌상
+                    Directions.Add((new Vector3(1, -1, 0), "+x-y"));  // 우하
+                    Directions.Add((new Vector3(-1, -1, 0), "-x-y")); // 좌하
+                    
+                    // Y-Z 평면 대각선 (4개)
+                    Directions.Add((new Vector3(0, 1, 1), "+y+z"));   // 상앞
+                    Directions.Add((new Vector3(0, 1, -1), "+y-z"));  // 상뒤
+                    Directions.Add((new Vector3(0, -1, 1), "-y+z"));  // 하앞
+                    Directions.Add((new Vector3(0, -1, -1), "-y-z")); // 하뒤
+                    
+                    // X-Z 평면 대각선 (4개)
+                    Directions.Add((new Vector3(1, 0, 1), "+x+z"));   // 우앞
+                    Directions.Add((new Vector3(-1, 0, 1), "-x+z"));  // 좌앞
+                    Directions.Add((new Vector3(1, 0, -1), "+x-z"));  // 우뒤
+                    Directions.Add((new Vector3(-1, 0, -1), "-x-z")); // 좌뒤
+                    
+                    // 완전 3D 대각선 (8개)
+                    Directions.Add((new Vector3(1, 1, 1), "+x+y+z"));     // 우상앞
+                    Directions.Add((new Vector3(-1, 1, 1), "-x+y+z"));    // 좌상앞
+                    Directions.Add((new Vector3(1, -1, 1), "+x-y+z"));    // 우하앞
+                    Directions.Add((new Vector3(-1, -1, 1), "-x-y+z"));   // 좌하앞
+                    Directions.Add((new Vector3(1, 1, -1), "+x+y-z"));    // 우상뒤
+                    Directions.Add((new Vector3(-1, 1, -1), "-x+y-z"));   // 좌상뒤
+                    Directions.Add((new Vector3(1, -1, -1), "+x-y-z"));   // 우하뒤
+                    Directions.Add((new Vector3(-1, -1, -1), "-x-y-z"));  // 좌하뒤
+                }
             }
             else
             {
-                Directions.Add((new float[] { 0, 1 }, "+y"));
-                Directions.Add((new float[] { 0, -1 }, "-y"));
-                Directions.Add((new float[] { 1, 0 }, "+x"));
-                Directions.Add((new float[] { -1, 0 }, "-x"));
+                // 2D일 경우 기본 4방향 (X-Z 평면)
+                Directions.Add((new Vector3(0, 0, 1), "+z"));
+                Directions.Add((new Vector3(0, 0, -1), "-z"));
+                Directions.Add((new Vector3(1, 0, 0), "+x"));
+                Directions.Add((new Vector3(-1, 0, 0), "-x"));
+                
+                // 2D 대각선 방향 (4개)
+                if (UseDiagonals)
+                {
+                    Directions.Add((new Vector3(1, 0, 1), "+x+z"));    // 우앞
+                    Directions.Add((new Vector3(-1, 0, 1), "-x+z"));   // 좌앞
+                    Directions.Add((new Vector3(1, 0, -1), "+x-z"));   // 우뒤
+                    Directions.Add((new Vector3(-1, 0, -1), "-x-z"));  // 좌뒤
+                }
             }
             
             Debug.Log($"방향 설정 완료: {Directions.Count}개 방향");
@@ -121,7 +196,7 @@ namespace Model
             }
             
             // 장애물 고려한 유효 좌표 생성
-            PhyVertex = new List<float[]>();
+            PhyVertex = new List<Vector3>();
             
             // 그리드 크기 계산 (너무 많은 포인트를 생성하지 않도록)
             int gridDensity = 1; // 기본값, 필요시 조정
@@ -161,7 +236,8 @@ namespace Model
                             break;
                         }
                     }
-                    if (isValid) PhyVertex.Add(new float[] { i, j, k });
+                    // XYZ 순서 유지 (Y축이 높이)
+                    if (isValid) PhyVertex.Add(new Vector3(i, j, k));
                 }
             }
             else
@@ -182,7 +258,8 @@ namespace Model
                             break;
                         }
                     }
-                    if (isValid) PhyVertex.Add(new float[] { i, j });
+                    // 2D 좌표는 XZ 평면에 매핑 (Y=0)
+                    if (isValid) PhyVertex.Add(new Vector3(i, 0, j));
                 }
             }
             
@@ -192,17 +269,20 @@ namespace Model
                 Debug.LogWarning("PhyVertex가 비어있습니다. 기본 좌표를 추가합니다.");
                 
                 // 공간 중앙에 기본 좌표 추가
-                float[] centerPoint = new float[Dim];
-                for (int i = 0; i < Dim; i++)
+                Vector3 centerPoint = new Vector3();
+                for (int i = 0; i < Math.Min(3, Dim); i++)
                 {
-                    centerPoint[i] = (SpaceCoords[0][i] + SpaceCoords[1][i]) / 2;
+                    float value = (SpaceCoords[0][i] + SpaceCoords[1][i]) / 2;
+                    if (i == 0) centerPoint.x = value;
+                    else if (i == 1) centerPoint.y = value;
+                    else if (i == 2) centerPoint.z = value;
                 }
                 PhyVertex.Add(centerPoint);
                 
                 // 주요 방향으로 추가 좌표 생성
                 foreach (var dir in Directions)
                 {
-                    float[] newPoint = Functions.TupleOperations(centerPoint, dir.Item1, "+");
+                    Vector3 newPoint = centerPoint + dir.Item1;
                     PhyVertex.Add(newPoint);
                 }
             }
@@ -213,7 +293,7 @@ namespace Model
             
             foreach (var p in PhyVertex)
             {
-                string key = string.Join(",", p);
+                string key = $"{p.x},{p.y},{p.z}";
                 OpenSet[key] = 0f;
                 CloseSet[key] = 0;
             }
@@ -225,7 +305,7 @@ namespace Model
             int sampleSize = Math.Min(5, PhyVertex.Count);
             for (int i = 0; i < sampleSize; i++)
             {
-                Debug.Log($"샘플 좌표 {i}: {string.Join(",", PhyVertex[i])}");
+                Debug.Log($"샘플 좌표 {i}: {PhyVertex[i].x},{PhyVertex[i].y},{PhyVertex[i].z}");
             }
         }
 
@@ -241,8 +321,25 @@ namespace Model
             {
                 foreach (var dir in Directions)
                 {
-                    string edgeKey = string.Join(",", v) + ":" + dir.Item2;
+                    string edgeKey = $"{v.x},{v.y},{v.z}:{dir.Item2}";
                     float cost = edgeCost;
+                    
+                    // 대각선 이동은 비용을 추가 (직선보다 1.414배(√2) 또는 1.732배(√3) 더 높은 비용)
+                    if (dir.Item2.Contains("+") && dir.Item2.Split('+').Length > 2)
+                    {
+                        // 2개의 축을 사용하는 대각선 (√2 = 약 1.414)
+                        cost *= 1.414f;
+                    }
+                    else if (dir.Item2.Contains("-") && dir.Item2.Split('-').Length > 2)
+                    {
+                        // 2개의 축을 사용하는 대각선 (√2 = 약 1.414)
+                        cost *= 1.414f;
+                    }
+                    else if (dir.Item2.Length > 3) // 예: "+x+y+z" 또는 "-x-y-z" 등 3개 축 사용
+                    {
+                        // 3개의 축을 모두 사용하는 대각선 (√3 = 약 1.732)
+                        cost *= 1.732f;
+                    }
                     
                     // 장애물과의 거리 계산
                     bool isNearObstacle = false;
@@ -250,8 +347,8 @@ namespace Model
                     
                     foreach (var obs in ObstacleCoords)
                     {
-                        float[] closestPoint = ClosestPoint(v, obs[0], obs[1]);
-                        float distance = Distance(v, closestPoint);
+                        float[] closestPoint = ClosestPoint(Vector3ToFloatArray(v), obs[0], obs[1]);
+                        float distance = Distance(Vector3ToFloatArray(v), closestPoint);
                         
                         if (distance < minDistance)
                         {
@@ -328,23 +425,24 @@ namespace Model
         {
             return WPath * p.EdgeCost + WBend * p.NCP + WEnergy * p.Energy;
         }
-        public float HeuristicCost(float[] pCoord, float[] end)
+        public float HeuristicCost(Vector3 pCoord, Vector3 end)
         {
-            return Functions.ManhattanDistance(pCoord, end);
+            // 맨해튼 거리 계산
+            return Mathf.Abs(pCoord.x - end.x) + Mathf.Abs(pCoord.y - end.y) + Mathf.Abs(pCoord.z - end.z);
         }
-        public float TotalCost(Node p, float[] end)
+        public float TotalCost(Node p, Vector3 end)
         {
             return BaseCost(p) + HeuristicCost(p.Coord, end);
         }
 
-        public bool IsInOpenSet(float[] pCoord)
+        public bool IsInOpenSet(Vector3 pCoord)
         {
-            var key = string.Join(",", pCoord);
+            var key = $"{pCoord.x},{pCoord.y},{pCoord.z}";
             return OpenSet.ContainsKey(key) && OpenSet[key] == 0f;
         }
-        public bool IsInCloseSet(float[] pCoord)
+        public bool IsInCloseSet(Vector3 pCoord)
         {
-            var key = string.Join(",", pCoord);
+            var key = $"{pCoord.x},{pCoord.y},{pCoord.z}";
             return CloseSet.ContainsKey(key) && CloseSet[key] == 1;
         }
 
@@ -361,35 +459,44 @@ namespace Model
             return k >= MinDisBend;
         }
 
-        public bool IsEnoughSpace(float[] pCoord, string direction, float radius, float delta)
+        public bool IsEnoughSpace(Vector3 pCoord, string direction, float radius, float delta)
         {
-            Debug.LogVerbose($"IsEnoughSpace 확인: 좌표 {string.Join(",", pCoord)}, 방향 {direction}, 반경 {radius}");
+            Debug.LogVerbose($"IsEnoughSpace 확인: 좌표 {pCoord}, 방향 {direction}, 반경 {radius}");
             
             // 파이프 두께를 고려한 offset 계산 (2배 더 크게 설정)
-            var shift = Enumerable.Repeat((float)Math.Ceiling(radius * 2 + delta), Dim).ToArray();
+            float shiftAmount = (float)Math.Ceiling(radius * 2 + delta);
+            Vector3 shift = new Vector3(shiftAmount, shiftAmount, shiftAmount);
             
             // 현재 이동 방향에서는 shift 적용 안함
-            if (direction.Contains("x")) shift[0] = 0;
-            else if (direction.Contains("y")) shift[1] = 0;
-            else if (Dim == 3 && direction.Contains("z")) shift[2] = 0;
+            if (direction.Contains("x")) shift.x = 0;
+            else if (direction.Contains("y")) shift.y = 0; // Y축 (높이)
+            else if (Dim == 3 && direction.Contains("z")) shift.z = 0;
             
-            Debug.LogVerbose($"계산된 shift: {string.Join(",", shift)}");
+            Debug.LogVerbose($"계산된 shift: {shift.x},{shift.y},{shift.z}");
             
-            var p1 = Functions.TupleOperations(pCoord, shift, "-");
-            var p2 = Functions.TupleOperations(pCoord, shift, "+");
+            Vector3 p1 = pCoord - shift;
+            Vector3 p2 = pCoord + shift;
             
-            Debug.LogVerbose($"검사 범위: {string.Join(",", p1)} ~ {string.Join(",", p2)}");
+            Debug.LogVerbose($"검사 범위: {p1.x},{p1.y},{p1.z} ~ {p2.x},{p2.y},{p2.z}");
             
             var ranges = new List<List<int>>();
-            for (int i = 0; i < Dim; i++)
-                ranges.Add(Enumerable.Range((int)p1[i], (int)(p2[i] - p1[i] + 1)).ToList());
+            ranges.Add(Enumerable.Range((int)p1.x, (int)(p2.x - p1.x + 1)).ToList()); // X축
+            ranges.Add(Enumerable.Range((int)p1.y, (int)(p2.y - p1.y + 1)).ToList()); // Y축 (높이)
+            if (Dim == 3)
+                ranges.Add(Enumerable.Range((int)p1.z, (int)(p2.z - p1.z + 1)).ToList()); // Z축
             
             int pointsCount = 0;
             int missingPointsCount = 0;
             
             foreach (var item in CartesianProduct(ranges))
             {
-                var key = string.Join(",", item.Select(x => (float)x));
+                Vector3 checkPoint;
+                if (Dim == 3)
+                    checkPoint = new Vector3(item[0], item[1], item[2]);
+                else
+                    checkPoint = new Vector3(item[0], item[1], 0);
+                
+                var key = $"{checkPoint.x},{checkPoint.y},{checkPoint.z}";
                 pointsCount++;
                 
                 if (!OpenSet.ContainsKey(key)) 
@@ -427,9 +534,9 @@ namespace Model
         }
 
         // A* 알고리즘 실행
-        public (List<(float[], string)> bendPath, List<(float[], string)> path) Run((float[], string) startInfo, (float[], string) endInfo, float radius, float delta)
+        public (List<(Vector3, string)> bendPath, List<(Vector3, string)> path) Run((Vector3, string) startInfo, (Vector3, string) endInfo, float radius, float delta)
         {
-            Debug.Log($"A* 경로 탐색 시작: 시작점 {string.Join(",", startInfo.Item1)}, 목표점 {string.Join(",", endInfo.Item1)}");
+            Debug.Log($"A* 경로 탐색 시작: 시작점 {startInfo.Item1}, 목표점 {endInfo.Item1}");
             Debug.Log($"파라미터: 반경 = {radius}, 델타 = {delta}, WPath = {WPath}, WBend = {WBend}, WEnergy = {WEnergy}");
             
             // PhyVertex 확인
@@ -440,13 +547,15 @@ namespace Model
             }
             
             // 시작점과 끝점이 유효한지 확인
-            if (!OpenSet.ContainsKey(string.Join(",", startInfo.Item1)))
+            string startKey = $"{startInfo.Item1.x},{startInfo.Item1.y},{startInfo.Item1.z}";
+            if (!OpenSet.ContainsKey(startKey))
             {
                 Debug.LogWarning("시작점이 유효하지 않습니다. 가장 가까운 유효한 점을 찾습니다.");
                 startInfo = (FindNearestValidPoint(startInfo.Item1), startInfo.Item2);
             }
             
-            if (!OpenSet.ContainsKey(string.Join(",", endInfo.Item1)))
+            string endKey = $"{endInfo.Item1.x},{endInfo.Item1.y},{endInfo.Item1.z}";
+            if (!OpenSet.ContainsKey(endKey))
             {
                 Debug.LogWarning("끝점이 유효하지 않습니다. 가장 가까운 유효한 점을 찾습니다.");
                 endInfo = (FindNearestValidPoint(endInfo.Item1), endInfo.Item2);
@@ -474,19 +583,23 @@ namespace Model
                 var (curCost, curNode) = pq.Min;
                 
                 if (iterationCount % 50 == 0 || iterationCount < maxIterationsToLog) {
-                    Debug.Log($"반복 {iterationCount}: 현재 좌표 {string.Join(",", curNode.Coord)}, 비용 {curCost}");
+                    Debug.Log($"반복 {iterationCount}: 현재 좌표 {curNode.Coord}, 비용 {curCost}");
                 }
                 
                 pq.Remove(pq.Min);
-                if (curNode.Coord.SequenceEqual(endInfo.Item1))
+                
+                // 목표 도달 여부 확인
+                if (curNode.Coord == endInfo.Item1)
                 {
                     Debug.Log($"경로 찾음! 반복 횟수: {iterationCount}, 최종 비용: {curCost}");
                     var (bend, path) = BuildPath(curNode);
                     Debug.Log($"경로 포인트 수: {path.Count}, 굽힘 포인트 수: {bend.Count}");
                     return (bend, path);
                 }
-                CloseSet[string.Join(",", curNode.Coord)] = 1;
-                OpenSet[string.Join(",", curNode.Coord)] = 0f;
+                
+                string coordKey = $"{curNode.Coord.x},{curNode.Coord.y},{curNode.Coord.z}";
+                CloseSet[coordKey] = 1;
+                OpenSet[coordKey] = 0f;
                 
                 int neighborsCount = 0;
                 int validNeighborsCount = 0;
@@ -494,16 +607,10 @@ namespace Model
                 foreach (var dir in Directions)
                 {
                     neighborsCount++;
-                    var nextCoord = Functions.TupleOperations(curNode.Coord, dir.Item1, "+");
+                    Vector3 nextCoord = curNode.Coord + dir.Item1;
                     
-                    if (nextCoord == null)
-                    {
-                        Debug.LogError($"TupleOperations 결과가 null입니다. curNode.Coord = {string.Join(",", curNode.Coord)}, dir.Item1 = {string.Join(",", dir.Item1)}");
-                        continue;
-                    }
-                    
-                    var key = string.Join(",", nextCoord);
-                    Debug.LogVerbose($"이웃 탐색: {string.Join(",", curNode.Coord)} -> {key} (방향: {dir.Item2})");
+                    string key = $"{nextCoord.x},{nextCoord.y},{nextCoord.z}";
+                    Debug.LogVerbose($"이웃 탐색: {curNode.Coord} -> {key} (방향: {dir.Item2})");
                     
                     if (!OpenSet.ContainsKey(key)) 
                     {
@@ -543,7 +650,7 @@ namespace Model
                     {
                         // 장애물 비용 대폭 증가 (10배로)
                         float obstaclePenalty = 10f * WPath;
-                        Debug.LogVerbose($"장애물 감지: 좌표 {string.Join(",", nextNode.Coord)}, 기존 비용 {totalCost}에 패널티 {obstaclePenalty} 추가");
+                        Debug.LogVerbose($"장애물 감지: 좌표 {nextNode.Coord}, 기존 비용 {totalCost}에 패널티 {obstaclePenalty} 추가");
                         totalCost += obstaclePenalty;
                     }
                     
@@ -578,7 +685,7 @@ namespace Model
         }
         
         // 가장 가까운 유효한 좌표 찾기
-        private float[] FindNearestValidPoint(float[] point)
+        private Vector3 FindNearestValidPoint(Vector3 point)
         {
             if (PhyVertex == null || PhyVertex.Count == 0)
             {
@@ -587,11 +694,11 @@ namespace Model
             }
             
             float minDistance = float.MaxValue;
-            float[] closest = null;
+            Vector3 closest = point;
             
             foreach (var vertex in PhyVertex)
             {
-                float distance = Distance(point, vertex);
+                float distance = Vector3.Distance(point, vertex);
                 if (distance < minDistance)
                 {
                     minDistance = distance;
@@ -599,32 +706,26 @@ namespace Model
                 }
             }
             
-            if (closest != null)
-            {
-                Debug.Log($"가장 가까운 유효 좌표 발견: {string.Join(",", closest)}, 거리: {minDistance}");
-                return closest;
-            }
-            
-            Debug.LogWarning("가장 가까운 점을 찾지 못함, 원본 좌표 반환");
-            return point;
+            Debug.Log($"가장 가까운 유효 좌표 발견: {closest}, 거리: {minDistance}");
+            return closest;
         }
 
         // 경로 재구성
-        public (List<(float[], string)> bendPath, List<(float[], string)> path) BuildPath(Node p)
+        public (List<(Vector3, string)> bendPath, List<(Vector3, string)> path) BuildPath(Node p)
         {
-            var bendPath = new List<(float[], string)>();
-            var path = new List<(float[], string)>();
-            bendPath.Insert(0, p.CoordInfo);
+            var bendPath = new List<(Vector3, string)>();
+            var path = new List<(Vector3, string)>();
+            bendPath.Add(p.CoordInfo);
             while (true)
             {
-                if (p.Parent == null || p.Coord.SequenceEqual(Start.Coord)) break;
+                if (p.Parent == null || p.Coord == Start.Coord) break;
                 path.Insert(0, p.CoordInfo);
                 if (p.NCP == p.Parent.NCP + 1)
                     bendPath.Insert(0, p.Parent.CoordInfo);
                 p = p.Parent;
             }
             bendPath.Insert(0, Start.CoordInfo);
-            if (bendPath.Count > 1 && bendPath[0].Item1.SequenceEqual(bendPath[1].Item1))
+            if (bendPath.Count > 1 && bendPath[0].Item1 == bendPath[1].Item1)
                 bendPath.RemoveAt(0);
             path.Insert(0, Start.CoordInfo);
             return (bendPath, path);

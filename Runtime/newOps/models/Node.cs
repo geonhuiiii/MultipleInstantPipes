@@ -6,8 +6,8 @@ namespace Model
 {
     public class Node
     {
-        public (float[], string) CoordInfo;
-        public float[] Coord;
+        public (Vector3, string) CoordInfo;
+        public Vector3 Coord;
         public Node Parent;
         public string Direction;
         public int Depth;
@@ -15,15 +15,9 @@ namespace Model
         public float EdgeCost;
         public int Energy;
 
-        public Node((float[], string) coordInfo, Node parent = null, float edgeCost = 0f)
+        public Node((Vector3, string) coordInfo, Node parent = null, float edgeCost = 0f)
         {
-            // 좌표 정보 null 체크
-            if (coordInfo.Item1 == null)
-            {
-                Debug.LogError("Node 생성 오류: 좌표 배열이 null입니다.");
-                // 오류 시 기본 좌표 사용 (원점)
-                coordInfo.Item1 = new float[] { 0, 0, 0 };
-            }
+            // 좌표 정보 null 체크는 Vector3에서는 필요 없음
             
             // 방향 문자열 null 체크
             if (string.IsNullOrEmpty(coordInfo.Item2))
@@ -75,54 +69,43 @@ namespace Model
 
         public static bool operator <(Node a, Node b)
         {
-            if (a == null || b == null || a.Coord == null || b.Coord == null || 
-                a.Coord.Length == 0 || b.Coord.Length == 0)
+            if (a == null || b == null)
             {
                 Debug.LogError("Node 비교 연산 중 null 참조 발생");
                 return false;
             }
             
-            return a.Coord[0] < b.Coord[0];
+            return a.Coord.x < b.Coord.x;
         }
         
         public static bool operator >(Node a, Node b)
         {
-            if (a == null || b == null || a.Coord == null || b.Coord == null || 
-                a.Coord.Length == 0 || b.Coord.Length == 0)
+            if (a == null || b == null)
             {
                 Debug.LogError("Node 비교 연산 중 null 참조 발생");
                 return false;
             }
             
-            return a.Coord[0] > b.Coord[0];
+            return a.Coord.x > b.Coord.x;
         }
         
         public override bool Equals(object obj)
         {
             if (obj is Node other)
             {
-                if (Coord == null || other.Coord == null)
-                    return false;
-                    
-                return Coord.SequenceEqual(other.Coord);
+                return Coord == other.Coord;
             }
             return false;
         }
         
         public override int GetHashCode()
         {
-            if (Coord == null)
-                return 0;
-                
-            return string.Join(",", Coord).GetHashCode();
+            return Coord.GetHashCode();
         }
         
         public override string ToString()
         {
-            if (Coord == null)
-                return "Node(null)";
-                
-            return $"Node({string.Join(",", Coord)}, Dir={Direction}, NCP={NCP}, Cost={EdgeCost})";
+            return $"Node({Coord.x},{Coord.y},{Coord.z}, Dir={Direction}, NCP={NCP}, Cost={EdgeCost})";
         }
     }
 } 
