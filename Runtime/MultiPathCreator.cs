@@ -16,7 +16,7 @@ namespace InstantPipes
         public float Chaos = 0;
         public float StraightPathPriority = 10;
         public float NearObstaclesPriority = 0;
-        public int MaxIterations = 1000;
+        public int MaxIterations = 2000;
         public int MinDistanceBetweenBends = 3;
 
         public bool LastPathSuccess = true;
@@ -49,7 +49,7 @@ namespace InstantPipes
             }
             
             // 바운딩 박스 주변에 여유 공간 추가
-            float padding = 20f;
+            float padding = 10f;
             minX -= padding; minY -= padding; minZ -= padding;
             maxX += padding; maxY += padding; maxZ += padding;
             
