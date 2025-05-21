@@ -105,16 +105,26 @@ namespace Model
             return res;
         }
 
-        // 메인 실행 
+        // MainRun 메서드 수정 - 파이프 간 근접 가중치 적용
         public (List<List<(Vector3, string)>> pathN, List<List<(Vector3, string)>> bendPointsN) MainRun()
         {
             PathN = new List<List<(Vector3, string)>>();
             BendPointsN = new List<List<(Vector3, string)>>();
             CoveringListN = new List<HashSet<(string, string)>>();
             
+            // 파이프 생성 시간 기록 (충돌 시 우선순위 결정용)
+            var pipeCreationTimes = new Dictionary<int, float>();
+            float currentTime = 0;
+            
             // 첫 번째 단계: 모든 파이프에 대한 초기 경로 생성
             for (int k = 0; k < NPipes; k++)
             {
+                // 기존에 생성된 파이프와의 근접성에 따른 가중치 적용
+                if (k > 0 && PathN.Count > 0)
+                {
+                    ApplyProximityWeights(k);
+                }
+                
                 var pipe = Pipes[k];
                 var (bend, path) = Run(pipe.Item1, pipe.Item2, pipe.Item3, pipe.Item4);
                 
@@ -130,6 +140,10 @@ namespace Model
                 PathN.Add(path);
                 BendPointsN.Add(bend);
                 CoveringListN.Add(GetCoveringList(path, pipe.Item3, pipe.Item4));
+                
+                // 파이프 생성 시간 기록 (충돌 처리 시 우선순위 결정에 사용)
+                pipeCreationTimes[k] = currentTime;
+                currentTime += 1.0f;
             }
             
             // 초기 경로 유효성 검증
@@ -140,15 +154,18 @@ namespace Model
             bool hasCollisions = true;
             int attemptCount = 0;
             
+            // 파이프 간의 높이 조정 기록 (중복 조정 방지)
+            var heightAdjustments = new Dictionary<string, float>();
+            
             while (hasCollisions && attemptCount < maxCollisionResolveAttempts)
             {
                 attemptCount++;
                 
-                // 모든 파이프 쌍에 대해 충돌 검사
-                // 충돌 정보를 상세히 저장하는 구조 추가: (파이프1, 파이프2, 충돌 엣지 수, 충돌 심각도)
+                // 모든 파이프 쌍에 대해 충돌 검사 및 근접 검사
                 var collisionDetails = new List<(int pipe1, int pipe2, int edgeCount, float severity)>();
+                var proximityPairs = new List<(int pipe1, int pipe2, float distance, float threshold)>();
                 
-                // 공간 분할을 위한 간단한 그리드 기반 접근
+                // 공간 분할을 위한 그리드 기반 접근
                 var pipeGrids = new Dictionary<string, List<int>>();
                 
                 Debug.Log("NPipes  " + NPipes.ToString());
@@ -156,14 +173,12 @@ namespace Model
                 for (int i = 0; i < NPipes; i++)
                 {
                     if (PathN[i] == null || PathN[i].Count == 0) continue;
-                    // 파이프 경로의 시작점과 끝점으로 대략적인 바운딩 박스 생성
                     var startPoint = PathN[i][0].Item1;
                     var endPoint = PathN[i][PathN[i].Count - 1].Item1;
                     
-                    // 그리드 크기 (경로 길이에 따라 조정 가능)
                     int gridSize = 1;
                     
-                    // 시작점과 끝점을 포함하는 그리드 셀 계산
+                    // 그리드 셀 계산
                     int startX = (int)(startPoint.x / gridSize);
                     int startY = (int)(startPoint.y / gridSize);
                     int startZ = startPoint.z > 0 ? (int)(startPoint.z / gridSize) : 0;
@@ -172,7 +187,7 @@ namespace Model
                     int endY = (int)(endPoint.y / gridSize);
                     int endZ = endPoint.z > 0 ? (int)(endPoint.z / gridSize) : 0;
                     
-                    // 두 점 사이의 모든 그리드 셀 계산 (간단한 방식으로 직선 보간)
+                    // 바운딩 박스 계산
                     int minX = Math.Min(startX, endX);
                     int maxX = Math.Max(startX, endX);
                     int minY = Math.Min(startY, endY);
@@ -180,10 +195,13 @@ namespace Model
                     int minZ = Math.Min(startZ, endZ);
                     int maxZ = Math.Max(startZ, endZ);
                     
-                    // 파이프를 포함하는 모든 그리드 셀에 파이프 인덱스 추가
-                    for (int x = minX; x <= maxX; x++)
-                    for (int y = minY; y <= maxY; y++)
-                    for (int z = minZ; z <= maxZ; z++)
+                    // 해당 파이프의 반경을 고려하여 그리드 확장
+                    float pipeRadius = Pipes[i].Item3;
+                    int radiusGrids = (int)Math.Ceiling(pipeRadius * 3);
+                    
+                    for (int x = minX - radiusGrids; x <= maxX + radiusGrids; x++)
+                    for (int y = minY - radiusGrids; y <= maxY + radiusGrids; y++)
+                    for (int z = minZ - radiusGrids; z <= maxZ + radiusGrids; z++)
                     {
                         string gridKey = $"{x},{y},{z}";
                         if (!pipeGrids.ContainsKey(gridKey))
@@ -192,15 +210,13 @@ namespace Model
                     }
                 }
                 
-                // 동일한 그리드 셀에 있는 파이프들 간의 충돌만 검사
+                // 동일한 그리드 셀에 있는 파이프들 간의 검사
                 var checkedPairs = new HashSet<string>();
                 
                 foreach (var grid in pipeGrids)
                 {
-                    
                     var pipesInGrid = grid.Value;
                     
-                    // 이 그리드에 있는 파이프 쌍 검사
                     for (int idx1 = 0; idx1 < pipesInGrid.Count; idx1++)
                     {
                         int i = pipesInGrid[idx1];
@@ -216,33 +232,55 @@ namespace Model
                             
                             if (PathN[i] == null || PathN[j] == null) continue;
                             
-                            // 두 경로 간 충돌 엣지 찾기
-                            var conflictEdges = FindConflictEdges(PathN[i], PathN[j]);
+                            // 두 경로 간 최소 거리 계산
+                            float minDistance = CalculateMinDistanceBetweenPaths(PathN[i], PathN[j]);
                             
-                            // 충돌이 있으면 상세 정보 기록
-                            if (conflictEdges.Count > 0)
+                            // 두 파이프 반경의 합 * 3 계산 (근접 임계값)
+                            float radiusI = Pipes[i].Item3;
+                            float radiusJ = Pipes[j].Item3;
+                            float proximityThreshold = (radiusI + radiusJ) * 3.0f;
+                            
+                            // 충돌 검사 (실제 충돌하는 경우)
+                            if (minDistance < radiusI + radiusJ)
                             {
-                                // 충돌 심각도 계산: 충돌 엣지 수와 파이프 두께에 기반
-                                float thickness1 = Pipes[i].Item3; // 파이프1 두께(반경)
-                                float thickness2 = Pipes[j].Item3; // 파이프2 두께(반경)
-                                
-                                // 심각도 = 충돌 엣지 수 * (두 파이프 두께의 합)
-                                float severity = conflictEdges.Count * (thickness1 + thickness2);
-                                
-                                collisionDetails.Add((i, j, conflictEdges.Count, severity));
-                                Debug.Log($"파이프 {i}와 {j} 사이에 {conflictEdges.Count}개의 충돌 감지 (심각도: {severity:F2})");
+                                var conflictEdges = FindConflictEdges(PathN[i], PathN[j]);
+                                if (conflictEdges.Count > 0)
+                                {
+                                    // 충돌 심각도 계산
+                                    float severity = conflictEdges.Count * (radiusI + radiusJ);
+                                    collisionDetails.Add((i, j, conflictEdges.Count, severity));
+                                    Debug.Log($"파이프 {i}와 {j} 사이에 {conflictEdges.Count}개의 충돌 감지 (심각도: {severity:F2})");
+                                }
+                            }
+                            // 근접 검사 (충돌은 아니지만 가까운 경우)
+                            else if (minDistance < proximityThreshold)
+                            {
+                                proximityPairs.Add((i, j, minDistance, proximityThreshold));
+                                Debug.Log($"파이프 {i}와 {j} 사이 거리({minDistance:F2})가 임계값({proximityThreshold:F2}) 미만");
                             }
                         }
                     }
                 }
                 
-                // 심각도에 따라 충돌 정렬 (더 심각한 충돌 먼저 해결)
-                collisionDetails.Sort((a, b) => b.severity.CompareTo(a.severity));
+                // 가까운 파이프 쌍에 대해 가중치 적용
+                foreach (var (pipe1, pipe2, distance, threshold) in proximityPairs)
+                {
+                    // 거리에 반비례하는 가중치 계산 (거리가 가까울수록 더 높은 가중치)
+                    float proximityFactor = 1.0f - (distance / threshold);
+                    float weightMultiplier = 1.0f + (4.0f * proximityFactor); // 최대 5배까지 증가
+                    
+                    Debug.Log($"파이프 {pipe1}와 {pipe2} 사이 근접성 가중치 적용: 거리={distance:F2}, 가중치={weightMultiplier:F2}배");
+                    
+                    // 두 파이프 모두에 가중치 적용 (더 나중에 생성된 파이프에 더 높은 가중치)
+                    int newerPipe = pipeCreationTimes[pipe1] < pipeCreationTimes[pipe2] ? pipe2 : pipe1;
+                    ApplyProximityWeightsBetweenPaths(newerPipe, PathN[pipe1], PathN[pipe2], weightMultiplier);
+                }
                 
-                // 정렬된 충돌 목록에서 파이프 쌍 추출
+                // 심각도에 따라 충돌 정렬
+                collisionDetails.Sort((a, b) => b.severity.CompareTo(a.severity));
                 var collisions = collisionDetails.Select(c => (c.pipe1, c.pipe2)).ToList();
                 
-                // 심각도 기준 충돌 요약 출력
+                // 충돌 요약 출력
                 if (collisionDetails.Count > 0)
                 {
                     Debug.Log($"충돌 요약 (심각도 순):");
@@ -262,83 +300,63 @@ namespace Model
                 
                 Debug.Log($"충돌 해결 시도 {attemptCount}: {collisions.Count}개의 충돌 쌍 발견");
                 
-                // 충돌하는 파이프를 재계산하기 위해 엣지 비용 업데이트
+                // 충돌 해결 전략 구현
                 foreach (var (i, j) in collisions)
                 {
-                    // 충돌 패널티를 적용할 파이프 선택
-                    // 두 파이프 중 더 짧은 경로를 가진 파이프를 선택해 재계산
-                    int pipeToUpdate = (PathN[i].Count <= PathN[j].Count) ? i : j;
+                    // 기존 로직대로 높이 조정 및 경로 재계산
+                    int olderPipe = pipeCreationTimes[i] < pipeCreationTimes[j] ? i : j;
+                    int newerPipe = olderPipe == i ? j : i;
                     
-                    // 충돌 영역에 패널티 적용
-                    UpdateEdgeCostForCollision(pipeToUpdate, PathN[i], PathN[j]);
+                    string adjustmentKey = olderPipe < newerPipe ? $"{olderPipe}:{newerPipe}" : $"{newerPipe}:{olderPipe}";
                     
-                    // 업데이트된 비용으로 경로 재계산
-                    var pipe = Pipes[pipeToUpdate];
-                    var (newBend, newPath) = Run(pipe.Item1, pipe.Item2, pipe.Item3, pipe.Item4);
-                    
-                    // 경로 생성 실패 시 대체 경로 생성
-                    if (newPath == null || newPath.Count == 0)
+                    if (!heightAdjustments.ContainsKey(adjustmentKey))
                     {
-                        Debug.LogWarning($"파이프 {pipeToUpdate}의 경로 재계산 실패. 대체 경로를 시도합니다.");
-                        newPath = TryAlternativePath(pipe.Item1, pipe.Item2, pipe.Item3, pipe.Item4);
-                        newBend = CreateStraightBendPath(pipe.Item1, pipe.Item2);
-                    }
-                    
-                    // 이전 경로와 새 경로가 동일한지 검사
-                    bool pathChanged = !PathsEqual(PathN[pipeToUpdate], newPath);
-                    
-                    if (pathChanged)
-                    {
-                        Debug.Log($"파이프 {pipeToUpdate}의 경로가 재계산되었습니다. 이전: {PathN[pipeToUpdate].Count}개 포인트, 새 경로: {newPath.Count}개 포인트");
-                        PathN[pipeToUpdate] = newPath;
-                        BendPointsN[pipeToUpdate] = newBend;
-                        CoveringListN[pipeToUpdate] = GetCoveringList(newPath, pipe.Item3, pipe.Item4);
+                        float olderPipeRadius = Pipes[olderPipe].Item3;
+                        float newerPipeRadius = Pipes[newerPipe].Item3;
+                        float heightAdjustment = (olderPipeRadius + newerPipeRadius) * 2f;
+                        
+                        var olderPipe_start = Pipes[olderPipe].Item1;
+                        var olderPipe_end = Pipes[olderPipe].Item2;
+                        
+                        Vector3 adjustedStartPos = new Vector3(
+                            olderPipe_start.Item1.x,
+                            olderPipe_start.Item1.y + heightAdjustment,
+                            olderPipe_start.Item1.z
+                        );
+                        
+                        Vector3 adjustedEndPos = new Vector3(
+                            olderPipe_end.Item1.x,
+                            olderPipe_end.Item1.y + heightAdjustment,
+                            olderPipe_end.Item1.z
+                        );
+                        
+                        Pipes[olderPipe] = (
+                            (adjustedStartPos, olderPipe_start.Item2), 
+                            (adjustedEndPos, olderPipe_end.Item2),
+                            olderPipeRadius,
+                            Pipes[olderPipe].Item4
+                        );
+                        
+                        heightAdjustments[adjustmentKey] = heightAdjustment;
+                        
+                        Debug.Log($"파이프 {olderPipe}의 높이를 {heightAdjustment} 만큼 증가시켰습니다.");
+                        
+                        // 두 파이프 모두 경로 재계산
+                        RecalculatePipePath(olderPipe);
+                        RecalculatePipePath(newerPipe);
                     }
                     else
                     {
-                        Debug.Log($"파이프 {pipeToUpdate}의 경로가 변경되지 않았습니다. 추가 패널티 적용");
+                        Debug.Log($"파이프 {olderPipe}와 {newerPipe}는 이미 높이 조정을 했지만 여전히 충돌합니다. 경로 비용 조정.");
                         
-                        // 경로가 변경되지 않은 경우 더 강력한 패널티 적용
-                        ApplyStrongerPenalty(pipeToUpdate, PathN[i], PathN[j]);
+                        // 충돌 엣지에 대한 비용 증가 (더 높은 가중치 적용)
+                        UpdateEdgeCostForCollision(olderPipe, PathN[i], PathN[j], 8.0f); // 가중치 증가
+                        UpdateEdgeCostForCollision(newerPipe, PathN[i], PathN[j], 10.0f); // 더 높은 가중치
                         
-                        // 다시 경로 계산 시도
-                        (newBend, newPath) = Run(pipe.Item1, pipe.Item2, pipe.Item3, pipe.Item4);
-                        
-                        // 다시 경로 변경 확인
-                        bool pathChangedRetry = !PathsEqual(PathN[pipeToUpdate], newPath);
-                        
-                        if (pathChangedRetry)
-                        {
-                            Debug.Log($"강력한 패널티 적용 후 파이프 {pipeToUpdate}의 경로가 재계산되었습니다.");
-                            PathN[pipeToUpdate] = newPath;
-                            BendPointsN[pipeToUpdate] = newBend;
-                            CoveringListN[pipeToUpdate] = GetCoveringList(newPath, pipe.Item3, pipe.Item4);
-                        }
-                        else
-                        {
-                            // 다른 파이프 시도
-                            int otherPipe = (pipeToUpdate == i) ? j : i;
-                            Debug.Log($"다른 파이프 {otherPipe} 재계산 시도");
-                            
-                            UpdateEdgeCostForCollision(otherPipe, PathN[i], PathN[j]);
-                            pipe = Pipes[otherPipe];
-                            (newBend, newPath) = Run(pipe.Item1, pipe.Item2, pipe.Item3, pipe.Item4);
-                            
-                            pathChanged = !PathsEqual(PathN[otherPipe], newPath);
-                            
-                            if (pathChanged)
-                            {
-                                Debug.Log($"파이프 {otherPipe}의 경로가 재계산되었습니다.");
-                                PathN[otherPipe] = newPath;
-                                BendPointsN[otherPipe] = newBend;
-                                CoveringListN[otherPipe] = GetCoveringList(newPath, pipe.Item3, pipe.Item4);
-                            }
-                        }
+                        RecalculatePipePath(olderPipe);
+                        RecalculatePipePath(newerPipe);
                     }
                 }
-                
-                // 매 반복 후 변경된 경로에 대해 충돌 검사를 다시 수행할 필요가 있는지 확인
-                // 이 부분은 다음 루프 반복에서 자동으로 처리됨
             }
             
             if (attemptCount >= maxCollisionResolveAttempts && hasCollisions)
@@ -350,6 +368,263 @@ namespace Model
             ValidateAllPaths();
             
             return (PathN, BendPointsN);
+        }
+        
+        // 두 경로 간 최소 거리 계산 메서드
+        private float CalculateMinDistanceBetweenPaths(List<(Vector3, string)> path1, List<(Vector3, string)> path2)
+        {
+            if (path1 == null || path1.Count == 0 || path2 == null || path2.Count == 0)
+                return float.MaxValue;
+                
+            float minDistance = float.MaxValue;
+            
+            // 두 경로의 모든 점 쌍에 대해 거리 계산
+            for (int i = 0; i < path1.Count; i++)
+            {
+                for (int j = 0; j < path2.Count; j++)
+                {
+                    float distance = Vector3.Distance(path1[i].Item1, path2[j].Item1);
+                    if (distance < minDistance)
+                    {
+                        minDistance = distance;
+                    }
+                }
+            }
+            
+            return minDistance;
+        }
+        
+        // 새 파이프를 생성할 때 기존 파이프와의 근접성에 대한 가중치 적용
+        private void ApplyProximityWeights(int newPipeIndex)
+        {
+            var newPipeStart = Pipes[newPipeIndex].Item1.Item1;
+            var newPipeEnd = Pipes[newPipeIndex].Item2.Item1;
+            float newPipeRadius = Pipes[newPipeIndex].Item3;
+            
+            Debug.Log($"파이프 {newPipeIndex}에 대한 근접성 가중치 계산 시작");
+            
+            // 이미 생성된 파이프들과의 거리 검사
+            for (int i = 0; i < PathN.Count; i++)
+            {
+                if (PathN[i] == null || PathN[i].Count == 0) continue;
+                
+                float existingPipeRadius = Pipes[i].Item3;
+                float proximityThreshold = (newPipeRadius + existingPipeRadius) * 3.0f;
+                
+                // 새 파이프의 시작점/끝점과 기존 경로 간의 거리 계산
+                float minStartDistance = float.MaxValue;
+                float minEndDistance = float.MaxValue;
+                
+                foreach (var point in PathN[i])
+                {
+                    float startDistance = Vector3.Distance(newPipeStart, point.Item1);
+                    float endDistance = Vector3.Distance(newPipeEnd, point.Item1);
+                    
+                    minStartDistance = Mathf.Min(minStartDistance, startDistance);
+                    minEndDistance = Mathf.Min(minEndDistance, endDistance);
+                }
+                
+                // 최소 거리가 임계값보다 작으면 가중치 적용
+                if (minStartDistance < proximityThreshold || minEndDistance < proximityThreshold)
+                {
+                    float minDistance = Mathf.Min(minStartDistance, minEndDistance);
+                    float proximityFactor = 1.0f - (minDistance / proximityThreshold);
+                    float weightMultiplier = 1.0f + (4.0f * proximityFactor); // 최대 5배까지 증가
+                    
+                    Debug.Log($"파이프 {newPipeIndex}와 기존 파이프 {i} 사이 근접성 가중치 적용: 거리={minDistance:F2}, 가중치={weightMultiplier:F2}배");
+                    
+                    // 기존 경로 주변에 가중치 적용
+                    ApplyProximityWeightToPath(PathN[i], proximityThreshold, weightMultiplier);
+                }
+            }
+        }
+        
+        // 파이프 주위에 근접성 가중치 적용
+        private void ApplyProximityWeightToPath(List<(Vector3, string)> path, float proximityThreshold, float weightMultiplier)
+        {
+            if (path == null || path.Count == 0) return;
+            
+            // 경로의 각 점 주변에 가중치 적용
+            foreach (var (point, direction) in path)
+            {
+                // 각 방향에 대해 주변 영역에 가중치 적용
+                foreach (var dir in Directions)
+                {
+                    // 현재 점에서 탐색 방향으로 proximityThreshold 거리만큼 탐색
+                    for (float distance = 0.5f; distance <= proximityThreshold; distance += 0.5f)
+                    {
+                        Vector3 proximityPoint = point + dir.Item1 * distance;
+                        
+                        // 각 방향에 대한 엣지 비용 증가
+                        ApplyProximityWeightToPoint(proximityPoint, weightMultiplier * (1 - distance / proximityThreshold));
+                    }
+                }
+            }
+        }
+        
+        // 특정 점 주변에 가중치 적용
+        private void ApplyProximityWeightToPoint(Vector3 point, float weightMultiplier)
+        {
+            string pointKey = $"{point.x},{point.y},{point.z}";
+            
+            // 각 방향에 대한 엣지 비용 증가
+            foreach (var dir in Directions)
+            {
+                string edgeKey = $"{pointKey}:{dir.Item2}";
+                
+                if (EdgeCost.ContainsKey(edgeKey))
+                {
+                    float currentCost = EdgeCost[edgeKey];
+                    EdgeCost[edgeKey] = currentCost * weightMultiplier;
+                }
+                else
+                {
+                    // 엣지 비용이 없는 경우, 기본값에 가중치 적용
+                    EdgeCost[edgeKey] = 1.0f * weightMultiplier;
+                }
+            }
+        }
+        
+        // 두 경로 사이의 근접성 가중치 적용
+        private void ApplyProximityWeightsBetweenPaths(int targetPipeIndex, List<(Vector3, string)> path1, List<(Vector3, string)> path2, float weightMultiplier)
+        {
+            float pipeRadius = Pipes[targetPipeIndex].Item3;
+            float searchRadius = pipeRadius * 3.0f;
+            
+            Debug.Log($"파이프 {targetPipeIndex}에 주변 파이프와의 근접성 가중치 적용 (가중치: {weightMultiplier:F2}배)");
+            
+            // 두 경로의 모든 점 쌍에 대해 가중치 적용
+            foreach (var point1 in path1)
+            {
+                foreach (var point2 in path2)
+                {
+                    float distance = Vector3.Distance(point1.Item1, point2.Item1);
+                    
+                    if (distance < searchRadius)
+                    {
+                        // 거리에 반비례하는 가중치 계산
+                        float proximityFactor = 1.0f - (distance / searchRadius);
+                        float localWeight = weightMultiplier * proximityFactor;
+                        
+                        // 두 점 사이의 중간 지점 주변에 가중치 적용
+                        Vector3 midPoint = (point1.Item1 + point2.Item1) / 2.0f;
+                        
+                        // 중간 지점 주변 영역에 가중치 적용
+                        for (float r = 0; r <= searchRadius; r += searchRadius / 4)
+                        {
+                            foreach (var dir in Directions)
+                            {
+                                Vector3 weightPoint = midPoint + dir.Item1 * r;
+                                ApplyProximityWeightToPoint(weightPoint, localWeight * (1 - r / searchRadius));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 충돌 엣지에 가중치 적용 메서드 개선
+        private void UpdateEdgeCostForCollision(int pipeIndex, List<(Vector3, string)> path1, List<(Vector3, string)> path2, float weightMultiplier = 5.0f)
+        {
+            // 두 경로 간 충돌 엣지 찾기
+            var conflictEdges = FindConflictEdges(path1, path2);
+            
+            Debug.Log($"파이프 {pipeIndex}에 충돌 가중치 적용: {conflictEdges.Count}개 엣지, 가중치 {weightMultiplier:F2}배");
+            
+            // 충돌하는 각 엣지에 대해 비용 증가
+            foreach (var (vertex, direction) in conflictEdges)
+            {
+                string key = $"{vertex}:{direction}";
+                
+                // 기존 비용에서 패널티 추가
+                float currentCost = EdgeCost.ContainsKey(key) ? EdgeCost[key] : 1.0f;
+                EdgeCost[key] = currentCost * weightMultiplier;
+                
+                Debug.Log($"파이프 {pipeIndex}의 엣지 {key}에 대한 비용이 {currentCost}에서 {EdgeCost[key]}로 증가");
+            }
+            
+            // 충돌 영역 주변에도 가중치 적용
+            ApplyWeightToSurroundingArea(conflictEdges, weightMultiplier * 0.5f);
+        }
+        
+        // 충돌 영역 주변에 가중치 적용
+        private void ApplyWeightToSurroundingArea(List<(string, string)> conflictEdges, float weightMultiplier)
+        {
+            // 충돌 엣지 주변 영역에 가중치 적용
+            HashSet<string> vertices = new HashSet<string>();
+            
+            // 먼저 충돌 엣지에서 정점 추출
+            foreach (var (vertex, _) in conflictEdges)
+            {
+                vertices.Add(vertex);
+            }
+            
+            // 주변 정점에 대해 가중치 적용
+            foreach (string vertex in vertices)
+            {
+                // 정점 좌표 파싱
+                string[] coords = vertex.Split(',');
+                if (coords.Length < 3) continue;
+                
+                if (float.TryParse(coords[0], out float x) &&
+                    float.TryParse(coords[1], out float y) &&
+                    float.TryParse(coords[2], out float z))
+                {
+                    Vector3 vertexPos = new Vector3(x, y, z);
+                    
+                    // 주변 영역에 가중치 적용
+                    for (float dx = -1; dx <= 1; dx += 0.5f)
+                    for (float dy = -1; dy <= 1; dy += 0.5f)
+                    for (float dz = -1; dz <= 1; dz += 0.5f)
+                    {
+                        if (dx == 0 && dy == 0 && dz == 0) continue; // 자기 자신 제외
+                        
+                        Vector3 nearbyPoint = new Vector3(x + dx, y + dy, z + dz);
+                        float distance = Vector3.Distance(vertexPos, nearbyPoint);
+                        float localWeight = weightMultiplier * (1 - distance / 1.732f); // √3 = 약 1.732
+                        
+                        if (localWeight > 0)
+                        {
+                            ApplyProximityWeightToPoint(nearbyPoint, localWeight);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 파이프 경로 재계산 메서드
+        private void RecalculatePipePath(int pipeIndex)
+        {
+            var pipe = Pipes[pipeIndex];
+            
+            Debug.Log($"파이프 {pipeIndex} 경로 재계산 시작: {pipe.Item1.Item1} -> {pipe.Item2.Item1}");
+            
+            // 공간을 더 넓혀서 탐색 (높이 제한 완화)
+            // AStar 알고리즘의 IsEnoughSpace 메서드가 더 넓은 공간을 탐색하도록 임시 설정
+            var (newBend, newPath) = Run(pipe.Item1, pipe.Item2, pipe.Item3, pipe.Item4);
+            
+            // 경로 생성 실패 시 대체 경로 생성
+            if (newPath == null || newPath.Count == 0)
+            {
+                Debug.LogWarning($"파이프 {pipeIndex}의 경로 재계산 실패. 대체 경로를 시도합니다.");
+                newPath = TryAlternativePath(pipe.Item1, pipe.Item2, pipe.Item3, pipe.Item4);
+                newBend = CreateStraightBendPath(pipe.Item1, pipe.Item2);
+            }
+            
+            // 이전 경로와 새 경로가 동일한지 검사
+            bool pathChanged = !PathsEqual(PathN[pipeIndex], newPath);
+            
+            if (pathChanged)
+            {
+                Debug.Log($"파이프 {pipeIndex}의 경로가 재계산되었습니다. 이전: {PathN[pipeIndex].Count}개 포인트, 새 경로: {newPath.Count}개 포인트");
+                PathN[pipeIndex] = newPath;
+                BendPointsN[pipeIndex] = newBend;
+                CoveringListN[pipeIndex] = GetCoveringList(newPath, pipe.Item3, pipe.Item4);
+            }
+            else
+            {
+                Debug.LogWarning($"파이프 {pipeIndex}의 경로가 변경되지 않았습니다. 더 넓은 공간이나 다른 전략이 필요할 수 있습니다.");
+            }
         }
         
         // 모든 경로의 유효성 검사 및 수정
@@ -608,79 +883,6 @@ namespace Model
             return true;
         }
         
-        // 최종 경로의 유효성 검증
-        private void ApplyStrongerPenalty(int pipeIndex, List<(Vector3, string)> path1, List<(Vector3, string)> path2)
-        {
-            // 두 경로 간 충돌 엣지 찾기
-            var conflictEdges = FindConflictEdges(path1, path2);
-            
-            // 충돌하는 각 엣지에 대해 비용 크게 증가
-            foreach (var (vertex, direction) in conflictEdges)
-            {
-                string key = $"{vertex}:{direction}";
-                
-                // 기존 비용에서 패널티 추가 (기존 비용이 없으면 기본값 사용)
-                float currentCost = EdgeCost.ContainsKey(key) ? EdgeCost[key] : 1.0f;
-                // 기존 2배에서 10배로 증가
-                EdgeCost[key] = currentCost * 10.0f;
-                
-                Debug.Log($"강력한 패널티: 파이프 {pipeIndex}의 엣지 {key}에 대한 비용이 {currentCost}에서 {EdgeCost[key]}로 크게 증가");
-            }
-            
-            // 충돌 영역 주변에도 패널티 적용
-            ApplyPenaltyToSurroundingArea(conflictEdges);
-        }
-        
-        // 충돌 영역 주변에도 패널티 적용
-        private void ApplyPenaltyToSurroundingArea(List<(string, string)> conflictEdges)
-        {
-            // 충돌 엣지 주변 영역에도 추가적인 패널티 적용
-            HashSet<string> vertices = new HashSet<string>();
-            
-            // 먼저 충돌 엣지에서 정점 추출
-            foreach (var (vertex, _) in conflictEdges)
-            {
-                vertices.Add(vertex);
-            }
-            
-            // 주변 정점에 대해 패널티 적용
-            foreach (string vertex in vertices)
-            {
-                // 모든 방향에 대해 패널티 적용
-                foreach (var dir in Directions)
-                {
-                    string key = $"{vertex}:{dir.Item2}";
-                    
-                    if (EdgeCost.ContainsKey(key))
-                    {
-                        float currentCost = EdgeCost[key];
-                        EdgeCost[key] = currentCost * 2.0f;
-                        Debug.Log($"주변 엣지 패널티: {key}에 대한 비용이 {currentCost}에서 {EdgeCost[key]}로 증가");
-                    }
-                }
-            }
-        }
-        
-        // 충돌에 기반하여 엣지 비용 업데이트
-        private void UpdateEdgeCostForCollision(int pipeIndex, List<(Vector3, string)> path1, List<(Vector3, string)> path2)
-        {
-            // 두 경로 간 충돌 엣지 찾기
-            var conflictEdges = FindConflictEdges(path1, path2);
-            
-            // 충돌하는 각 엣지에 대해 비용 증가
-            foreach (var (vertex, direction) in conflictEdges)
-            {
-                string key = $"{vertex}:{direction}";
-                
-                // 기존 비용에서 패널티 추가 (기존 비용이 없으면 기본값 사용)
-                float currentCost = EdgeCost.ContainsKey(key) ? EdgeCost[key] : 1.0f;
-                // 비용을 2배에서 5배로 증가
-                EdgeCost[key] = currentCost * 5.0f;
-                
-                Debug.Log($"파이프 {pipeIndex}의 엣지 {key}에 대한 비용이 {currentCost}에서 {EdgeCost[key]}로 증가");
-            }
-        }
-        
         // 로깅을 위한 Debug 클래스 추가
         private static class Debug
         {
@@ -750,6 +952,36 @@ namespace Model
             }
             
             return result;
+        }
+
+        // GetNearbyPipes 메서드 구현 - 기존 파이프 정보 제공
+        protected override List<PipeInfo> GetNearbyPipes()
+        {
+            var pipeInfoList = new List<PipeInfo>();
+            
+            // 모든 생성된 파이프의 정보 수집
+            for (int i = 0; i < PathN.Count; i++)
+            {
+                // 빈 경로는 건너뛰기
+                if (PathN[i] == null || PathN[i].Count == 0) continue;
+                
+                // 경로의 모든 점을 Vector3 리스트로 변환
+                var points = new List<Vector3>();
+                foreach (var (point, _) in PathN[i])
+                {
+                    points.Add(point);
+                }
+                
+                // 해당 파이프의 반경 가져오기
+                float radius = Pipes[i].Item3;
+                
+                // PipeInfo 객체 생성 및 추가
+                pipeInfoList.Add(new PipeInfo(points, radius));
+                
+                Debug.Log($"파이프 정보 추가: 인덱스 {i}, 포인트 수 {points.Count}, 반경 {radius}");
+            }
+            
+            return pipeInfoList;
         }
     }
 } 

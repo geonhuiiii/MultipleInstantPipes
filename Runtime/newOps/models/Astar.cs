@@ -54,7 +54,7 @@ namespace Model
             WBend = wBend;
             WEnergy = wEnergy;
             MinDisBend = minDisBend;
-            UseDiagonals = useDiagonals;
+            UseDiagonals = false;
             Dim = 3;
             
             // 기본 공간 좌표 유효성 확인
@@ -356,11 +356,11 @@ namespace Model
                         }
                         
                         // 장애물과의 거리가 매우 가까우면 (반경의 3배 이내) 높은 비용 설정
-                        if (distance < Radius * 1.5f)
+                        if (distance < Radius * 3f)
                         {
                             isNearObstacle = true;
                             // 거리가 가까울수록 비용 증가 (최대 10배까지)
-                            float distanceFactor = 1 - (distance / (Radius * 1.5f));
+                            float distanceFactor = 1 - (distance / (Radius * 3f));
                             float additionalCost = edgeCost * 9 * distanceFactor;
                             cost += additionalCost;
                             
@@ -373,6 +373,47 @@ namespace Model
                         }
                     }
                     
+                    // 다른 파이프와의 근접성을 고려한 가중치 적용 (이 기능이 추가됨)
+                    if (Radius > 0)
+                    {
+                        // 이동할 위치 계산
+                        Vector3 nextPos = v + dir.Item1;
+                        
+                        // 다른 파이프들과의 근접성 확인
+                        foreach (var otherPipe in GetNearbyPipes())
+                        {
+                            float minPipeDistance = float.MaxValue;
+                            
+                            // 파이프의 각 점과의 최소 거리 계산
+                            foreach (var pipePoint in otherPipe.Points)
+                            {
+                                float pipeDistance = Vector3.Distance(nextPos, pipePoint);
+                                minPipeDistance = Mathf.Min(minPipeDistance, pipeDistance);
+                            }
+                            
+                            float otherPipeRadius = otherPipe.Radius;
+                            float proximityThreshold = (Radius + otherPipeRadius) * 3.0f;
+                            
+                            // 근접 거리 내에 있으면 가중치 적용
+                            if (minPipeDistance < proximityThreshold)
+                            {
+                                float proximityFactor = 1 - (minPipeDistance / proximityThreshold);
+                                float proximityMultiplier = 1 + (4 * proximityFactor); // 최대 5배까지 증가
+                                
+                                // 거리에 반비례하는 비용 증가
+                                float additionalCost = cost * (proximityMultiplier - 1);
+                                cost += additionalCost;
+                                
+                                if (processedEdges % 100 == 0 || highCostEdges < 10)
+                                {
+                                    Debug.LogVerbose($"다른 파이프 근처 엣지: {edgeKey}, 거리: {minPipeDistance}, 임계값: {proximityThreshold}, 추가 비용: {additionalCost}");
+                                }
+                                
+                                highCostEdges++;
+                            }
+                        }
+                    }
+                    
                     EdgeCost.Add(edgeKey, cost);
                     processedEdges++;
                 }
@@ -381,6 +422,26 @@ namespace Model
             Debug.Log($"엣지 비용 초기화 완료: 총 {processedEdges}개 엣지, 고비용 엣지 {highCostEdges}개");
         }
         
+        // 근처 파이프 정보를 가져오는 가상 메서드 (실제 구현은 DecompositionHeuristic에서)
+        protected virtual List<PipeInfo> GetNearbyPipes()
+        {
+            // 기본 구현은 빈 리스트 반환
+            return new List<PipeInfo>();
+        }
+        
+        // 파이프 정보를 저장하는 클래스
+        protected class PipeInfo
+        {
+            public List<Vector3> Points;
+            public float Radius;
+            
+            public PipeInfo(List<Vector3> points, float radius)
+            {
+                Points = points;
+                Radius = radius;
+            }
+        }
+
         // 장애물에서 가장 가까운 점 찾기
         private float[] ClosestPoint(float[] point, float[] min, float[] max)
         {
@@ -459,18 +520,22 @@ namespace Model
             return k >= MinDisBend;
         }
 
+        // IsEnoughSpace 메서드 개선 - 파이프 반경을 고려한 회피 로직
         public bool IsEnoughSpace(Vector3 pCoord, string direction, float radius, float delta)
         {
             Debug.LogVerbose($"IsEnoughSpace 확인: 좌표 {pCoord}, 방향 {direction}, 반경 {radius}");
             
-            // 파이프 두께를 고려한 offset 계산 (2배 더 크게 설정)
-            float shiftAmount = (float)Math.Ceiling(radius * 2 + delta);
+            // 파이프 두께를 고려한 offset 계산 (3배로 증가)
+            float shiftAmount = (float)Math.Ceiling(radius * 3.0f + delta);
             Vector3 shift = new Vector3(shiftAmount, shiftAmount, shiftAmount);
             
             // 현재 이동 방향에서는 shift 적용 안함
             if (direction.Contains("x")) shift.x = 0;
             else if (direction.Contains("y")) shift.y = 0; // Y축 (높이)
             else if (Dim == 3 && direction.Contains("z")) shift.z = 0;
+            
+            // 높이(Y축) 방향으로는 더 적은 제약 적용 (높이 방향 파이프 분리 허용)
+            shift.y = shift.y * 0.5f;
             
             Debug.LogVerbose($"계산된 shift: {shift.x},{shift.y},{shift.z}");
             
@@ -487,6 +552,44 @@ namespace Model
             
             int pointsCount = 0;
             int missingPointsCount = 0;
+            int missingPointsThreshold = 2; // 높이 방향 레이어링을 위한 임계값 증가
+            List<Vector3> missingPoints = new List<Vector3>();
+            
+            // 다른 파이프와의 근접성 확인
+            bool isNearOtherPipe = false;
+            float minPipeDistance = float.MaxValue;
+            
+            foreach (var otherPipe in GetNearbyPipes())
+            {
+                foreach (var pipePoint in otherPipe.Points)
+                {
+                    float distance = Vector3.Distance(pCoord, pipePoint);
+                    
+                    if (distance < minPipeDistance)
+                    {
+                        minPipeDistance = distance;
+                    }
+                    
+                    // 두 파이프 반경의 합 * 3 이내에 있는지 확인
+                    float proximityThreshold = (radius + otherPipe.Radius) * 3.0f;
+                    if (distance < proximityThreshold)
+                    {
+                        isNearOtherPipe = true;
+                        
+                        // Y축 방향 이동인 경우 더 관대하게 처리 (수직 레이어링 허용)
+                        if (direction.Contains("y"))
+                        {
+                            // 수직 레이어링을 위한 임계값 완화
+                            float heightFactor = 0.5f;
+                            if (distance > (radius + otherPipe.Radius) * (1 + heightFactor))
+                            {
+                                // 충분히 떨어져 있으면 이동 허용
+                                isNearOtherPipe = false;
+                            }
+                        }
+                    }
+                }
+            }
             
             foreach (var item in CartesianProduct(ranges))
             {
@@ -502,18 +605,65 @@ namespace Model
                 if (!OpenSet.ContainsKey(key)) 
                 {
                     missingPointsCount++;
+                    missingPoints.Add(checkPoint);
                     Debug.LogVerbose($"장애물 감지: 좌표 {key}");
-                    // 하나라도 장애물이 감지되면 즉시 false 반환
-                    if (missingPointsCount > 0) 
+                }
+            }
+            
+            // 장애물 확인 결과 정리
+            bool enoughSpace = false;
+            
+            // 조건 1: 장애물이 임계값 이하면 통과
+            if (missingPointsCount <= missingPointsThreshold)
+            {
+                Debug.LogVerbose($"장애물이 임계값({missingPointsThreshold}) 이하: {missingPointsCount}개, 통과 허용");
+                enoughSpace = true;
+            }
+            // 조건 2: 장애물이 모두 같은 높이에 있고 Y축 이동인 경우
+            else if (missingPoints.Count > 0)
+            {
+                bool allObstaclesAtSameHeight = true;
+                float referenceHeight = missingPoints[0].y;
+                
+                foreach (var point in missingPoints)
+                {
+                    if (Math.Abs(point.y - referenceHeight) > 0.1f)
                     {
-                        Debug.LogVerbose($"장애물 충분히 감지됨: {missingPointsCount}개");
-                        return false;
+                        allObstaclesAtSameHeight = false;
+                        break;
+                    }
+                }
+                
+                if (allObstaclesAtSameHeight && direction.Contains("y"))
+                {
+                    Debug.LogVerbose($"모든 장애물이 동일 높이에 있어 높이 방향 이동 허용 (Y축 이동)");
+                    enoughSpace = true;
+                }
+            }
+            
+            // 다른 파이프와 가까운 경우의 처리
+            if (isNearOtherPipe)
+            {
+                // 수직(Y축) 이동인 경우 다른 파이프 피해 가도록 허용
+                if (direction.Contains("y"))
+                {
+                    Debug.LogVerbose($"다른 파이프 근처지만 수직 이동 허용. 거리: {minPipeDistance:F2}");
+                    // Y축 이동은 이미 처리됨
+                }
+                // 수평 이동인 경우 약간의 패널티만 주고 여전히 이동 허용 (완전히 막지 않음)
+                else
+                {
+                    Debug.LogVerbose($"다른 파이프 근처이나 수평 이동 제한적 허용. 거리: {minPipeDistance:F2}");
+                    // 수평 이동은 남은 공간이 충분하면 허용
+                    if (enoughSpace)
+                    {
+                        // 이 경우는 이미 enoughSpace가 true로 설정되어 있음
                     }
                 }
             }
             
-            Debug.LogVerbose($"장애물 검사 완료: 총 {pointsCount}개 포인트 중 {missingPointsCount}개 장애물");
-            return missingPointsCount == 0;
+            Debug.LogVerbose($"장애물 검사 완료: 총 {pointsCount}개 포인트 중 {missingPointsCount}개 장애물, 이동 가능: {enoughSpace}");
+            return enoughSpace || missingPointsCount == 0;
         }
 
         // Cartesian product helper
