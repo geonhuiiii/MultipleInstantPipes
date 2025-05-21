@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
 using System.Linq;
+using System.Threading;
 
 namespace InstantPipes
 {
@@ -30,6 +31,13 @@ namespace InstantPipes
         private Vector3 _endNormal;
         private bool _hasStartPoint = false;
         private bool _hasEndPoint = false;
+        
+        // 경로 생성 진행 상태와 취소를 위한 변수
+        private bool _isGeneratingPaths = false;
+        private bool _isRegeneratingPaths = false;
+        private float _currentProgressValue = 0f;
+        private string _currentProgressText = "";
+        private CancellationTokenSource _cancellationTokenSource;
         
         [MenuItem("Window/InstantPipes/Pipe Configuration UI")]
         public static void ShowWindow()
@@ -251,6 +259,41 @@ namespace InstantPipes
                     EditorGUILayout.EndVertical(); // End the top vertical even in early return case
                     return;
                 }
+            }
+            
+            // 진행 중인 작업이 있으면 진행 상태와 취소 버튼 표시
+            if (_isGeneratingPaths || _isRegeneratingPaths)
+            {
+                EditorGUILayout.Space(10);
+                EditorGUILayout.HelpBox($"작업 진행 중: {_currentProgressText}", MessageType.Info);
+                
+                // 진행 상태 표시줄
+                EditorGUI.ProgressBar(EditorGUILayout.GetControlRect(false, 24), 
+                    _currentProgressValue, 
+                    $"{Mathf.FloorToInt(_currentProgressValue * 100)}%");
+                
+                EditorGUILayout.Space(5);
+                
+                // 취소 버튼
+                GUI.backgroundColor = new Color(1f, 0.5f, 0.5f);
+                if (GUILayout.Button("작업 취소", GUILayout.Height(30)))
+                {
+                    if (_cancellationTokenSource != null && !_cancellationTokenSource.IsCancellationRequested)
+                    {
+                        _cancellationTokenSource.Cancel();
+                        Debug.Log("사용자에 의해 작업 취소됨");
+                    }
+                }
+                GUI.backgroundColor = Color.white;
+                
+                EditorGUILayout.Space(10);
+                
+                // 진행 중일 때는 다른 UI 표시하지 않음
+                EditorGUILayout.EndVertical();
+                
+                // 자동으로 창 다시 그리기 (진행 상태 업데이트)
+                Repaint();
+                return;
             }
             
             // Pipe list area
@@ -815,12 +858,18 @@ namespace InstantPipes
                 return;
             }
             
+            // 경로 생성 상태 설정
+            _isGeneratingPaths = true;
+            _currentProgressValue = 0f;
+            _currentProgressText = "파이프 설정 준비 중...";
+            _cancellationTokenSource = new CancellationTokenSource();
+            
             Undo.RecordObject(_generator, "Generate All Paths");
             
-            // Store info about all pipe endpoints
+            // 파이프 생성 정보 수집
             List<PipeInfo> pipesToCreate = new List<PipeInfo>();
             
-            // Extract all pipe endpoint info
+            // 모든 파이프 엔드포인트 정보 추출
             foreach (var config in _pipeConfigs)
             {
                 if (config.HasStartPoint && config.HasEndPoint)
@@ -837,86 +886,160 @@ namespace InstantPipes
                 }
             }
             
-            // Clear all existing pipes
+            // 진행 가능한 파이프가 없으면 종료
+            if (pipesToCreate.Count == 0)
+            {
+                _isGeneratingPaths = false;
+                EditorUtility.DisplayDialog("Generate All Paths", 
+                    "No valid pipe configurations found. Please set start and end points for at least one pipe configuration.", 
+                    "OK");
+                return;
+            }
+            
+            // 기존 파이프 모두 제거
             ClearAllPipes();
             
-            // 새로운 N:N 파이프 생성 방식 사용
-            if (pipesToCreate.Count > 0)
+            // 다중 파이프 생성 설정 준비
+            List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs = 
+                new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();
+            
+            // 진행 상태 표시 변수
+            int totalPaths = pipesToCreate.Count;
+            int processedPaths = 0;
+            bool isCancelled = false;
+            
+            // 모든 파이프 설정을 처리
+            for (int i = 0; i < pipesToCreate.Count; i++)
             {
-                // 다중 파이프 생성을 위한 설정 준비
-                List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs = 
-                    new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();
+                var pipeInfo = pipesToCreate[i];
                 
-                foreach (var pipeInfo in pipesToCreate)
+                // 취소 요청 확인
+                if (_cancellationTokenSource.IsCancellationRequested)
                 {
-                    // 각 파이프의 설정 추가
-                    Material pipeMaterial = new Material(Shader.Find("Universal Render Pipeline/Simple Lit"));
-                    pipeMaterial.name = $"Pipe_Material_{pipeInfo.Config.Name}";
-                    
-                    // 셰이더에 따라 색상 설정
-                    if (pipeMaterial.HasProperty("_BaseColor"))
-                    {
-                        pipeMaterial.SetColor("_BaseColor", pipeInfo.Color);
-                        
-                        if (pipeMaterial.HasProperty("_EmissionColor"))
-                        {
-                            pipeMaterial.EnableKeyword("_EMISSION");
-                            pipeMaterial.SetColor("_EmissionColor", pipeInfo.Color * 0.5f);
-                        }
-                    }
-                    else if (pipeMaterial.HasProperty("_Color"))
-                    {
-                        pipeMaterial.SetColor("_Color", pipeInfo.Color);
-                        
-                        if (pipeMaterial.HasProperty("_EmissionColor"))
-                        {
-                            pipeMaterial.EnableKeyword("_EMISSION");
-                            pipeMaterial.SetColor("_EmissionColor", pipeInfo.Color * 0.5f);
-                        }
-                    }
-                    
-                    // 파이프 설정 추가
-                    pipeConfigs.Add((
-                        pipeInfo.StartPoint, 
-                        pipeInfo.StartNormal, 
-                        pipeInfo.EndPoint, 
-                        pipeInfo.EndNormal, 
-                        pipeInfo.Radius,
-                        pipeMaterial
-                    ));
+                    isCancelled = true;
+                    break;
                 }
                 
-                // 파이프 생성 성공 여부 추적
-                int pipesBefore = _generator.Pipes.Count;
+                // 진행 상태 표시 및 취소 확인
+                float progress = (float)processedPaths / totalPaths;
+                UpdateProgress(progress, $"파이프 처리 중 ({processedPaths + 1}/{totalPaths}): {pipeInfo.Config.Name}");
                 
-                // 다중 파이프 생성 실행
-                bool success = _generator.AddMultiplePipes(pipeConfigs);
+                processedPaths++;
                 
-                // 파이프 연결 인덱스 추적
-                int newPipesCount = _generator.Pipes.Count - pipesBefore;
+                // 각 파이프의 설정 추가
+                Material pipeMaterial = new Material(Shader.Find("Universal Render Pipeline/Simple Lit"));
+                pipeMaterial.name = $"Pipe_Material_{pipeInfo.Config.Name}";
                 
-                if (newPipesCount == pipesToCreate.Count)
+                // 셰이더에 따라 색상 설정
+                if (pipeMaterial.HasProperty("_BaseColor"))
                 {
-                    // 각 파이프 구성에 인덱스 할당
-                    for (int i = 0; i < pipesToCreate.Count; i++)
-                    {
-                        int pipeIndex = pipesBefore + i;
-                        pipesToCreate[i].Config.AssociatedPipeIndices.Add(pipeIndex);
-                    }
+                    pipeMaterial.SetColor("_BaseColor", pipeInfo.Color);
                     
-                    if (success)
+                    if (pipeMaterial.HasProperty("_EmissionColor"))
                     {
-                        Debug.Log($"Successfully created {newPipesCount} pipes using N:N path generation.");
+                        pipeMaterial.EnableKeyword("_EMISSION");
+                        pipeMaterial.SetColor("_EmissionColor", pipeInfo.Color * 0.5f);
                     }
-                    else
+                }
+                else if (pipeMaterial.HasProperty("_Color"))
+                {
+                    pipeMaterial.SetColor("_Color", pipeInfo.Color);
+                    
+                    if (pipeMaterial.HasProperty("_EmissionColor"))
                     {
-                        Debug.LogWarning("Some paths could not be generated optimally.");
+                        pipeMaterial.EnableKeyword("_EMISSION");
+                        pipeMaterial.SetColor("_EmissionColor", pipeInfo.Color * 0.5f);
                     }
+                }
+                
+                // 파이프 설정 추가
+                pipeConfigs.Add((
+                    pipeInfo.StartPoint, 
+                    pipeInfo.StartNormal, 
+                    pipeInfo.EndPoint, 
+                    pipeInfo.EndNormal, 
+                    pipeInfo.Radius,
+                    pipeMaterial
+                ));
+            }
+            
+            // 취소된 경우 메시지 표시
+            if (isCancelled)
+            {
+                if (pipeConfigs.Count > 0)
+                {
+                    if (!EditorUtility.DisplayDialog("Operation Cancelled", 
+                        $"Path generation was cancelled. Do you want to generate paths for the {pipeConfigs.Count} processed configurations?", 
+                        "Generate Processed", "Cancel All"))
+                    {
+                        // 모든 작업 취소
+                        _isGeneratingPaths = false;
+                        return;
+                    }
+                    // 계속 진행 - 이미 처리된 파이프만 생성
                 }
                 else
                 {
-                    Debug.LogError($"Expected to create {pipesToCreate.Count} pipes, but created {newPipesCount}.");
+                    // 처리된 파이프가 없으면 종료
+                    _isGeneratingPaths = false;
+                    EditorUtility.DisplayDialog("Operation Cancelled", 
+                        "Path generation was cancelled. No paths were generated.", 
+                        "OK");
+                    return;
                 }
+            }
+            
+            // 파이프 생성 성공 여부 추적
+            int pipesBefore = _generator.Pipes.Count;
+            
+            // 파이프 생성 시작 메시지
+            UpdateProgress(0.9f, $"경로 생성 중 ({pipeConfigs.Count}개 구성)...");
+            
+            // 다중 파이프 생성 실행
+            bool success = _generator.AddMultiplePipes(pipeConfigs);
+            
+            // 파이프 연결 인덱스 추적
+            int newPipesCount = _generator.Pipes.Count - pipesBefore;
+            
+            if (newPipesCount == pipeConfigs.Count)
+            {
+                // 각 파이프 구성에 인덱스 할당
+                for (int i = 0; i < pipeConfigs.Count; i++)
+                {
+                    int configIndex = pipesToCreate.IndexOf(pipesToCreate.FirstOrDefault(p => 
+                        p.StartPoint == pipeConfigs[i].startPoint && 
+                        p.EndPoint == pipeConfigs[i].endPoint));
+                    
+                    if (configIndex >= 0 && configIndex < pipesToCreate.Count)
+                    {
+                        int pipeIndex = pipesBefore + i;
+                        pipesToCreate[configIndex].Config.AssociatedPipeIndices.Add(pipeIndex);
+                    }
+                }
+                
+                // 생성 완료 후 상태 초기화
+                _isGeneratingPaths = false;
+                
+                if (success)
+                {
+                    EditorUtility.DisplayDialog("Path Generation Complete", 
+                        $"Successfully created {newPipesCount} pipes" + 
+                        (isCancelled ? " (operation was partially cancelled)." : "."), 
+                        "OK");
+                }
+                else
+                {
+                    EditorUtility.DisplayDialog("Path Generation Warning", 
+                        "Paths were generated, but some could not be generated optimally.", 
+                        "OK");
+                }
+            }
+            else
+            {
+                _isGeneratingPaths = false;
+                EditorUtility.DisplayDialog("Path Generation Error", 
+                    $"Expected to create {pipeConfigs.Count} pipes, but created {newPipesCount}.", 
+                    "OK");
             }
             
             // 씬 업데이트
@@ -942,16 +1065,41 @@ namespace InstantPipes
                 return;
             }
             
+            // 상태 초기화 및 진행 설정
+            _isRegeneratingPaths = true;
+            _currentProgressValue = 0f;
+            _currentProgressText = "재생성 준비 중...";
+            _cancellationTokenSource = new CancellationTokenSource();
+            
             Undo.RecordObject(_generator, "Regenerate Paths");
+            
+            // 파이프 정보 수집
+            int totalPipes = _generator.Pipes.Count;
+            
+            // 진행 변수 초기화
+            bool isCancelled = false;
             
             // Create temporary colliders for all pipe ends to help path finding
             List<GameObject> tempColliders = new List<GameObject>();
             
             try
             {
-                // Create temporary colliders for all existing pipe endpoints
-                foreach (var pipe in _generator.Pipes)
+                // 파이프 엔드포인트에 임시 콜라이더 생성 (진행 상태 표시 포함)
+                for (int i = 0; i < _generator.Pipes.Count; i++)
                 {
+                    var pipe = _generator.Pipes[i];
+                    
+                    // 취소 요청 확인
+                    if (_cancellationTokenSource.IsCancellationRequested)
+                    {
+                        isCancelled = true;
+                        break;
+                    }
+                    
+                    // 진행 상태 표시 및 취소 확인
+                    float progress = (float)i / totalPipes * 0.5f; // 전체 작업의 반은 콜라이더 설정
+                    UpdateProgress(progress, $"충돌 설정 준비 중 ({i+1}/{totalPipes})");
+                    
                     if (pipe.Points.Count >= 2)
                     {
                         // Add collider at start point
@@ -967,6 +1115,16 @@ namespace InstantPipes
                     }
                 }
                 
+                // 취소된 경우 처리
+                if (isCancelled)
+                {
+                    _isRegeneratingPaths = false;
+                    EditorUtility.DisplayDialog("Operation Cancelled", 
+                        "Path regeneration was cancelled during preparation.", 
+                        "OK");
+                    return;
+                }
+                
                 // Ensure material is set before regenerating paths
                 if (_generator.Material == null)
                 {
@@ -977,23 +1135,59 @@ namespace InstantPipes
                 _generator.GridSize = 3f;
                 _generator.Height = 5f;
                 
+                // 경로 재생성 진행 메시지 표시
+                UpdateProgress(0.5f, "모든 경로 처리 중...");
+                
                 // Regenerate all paths
                 bool success = _generator.RegeneratePaths();
+                
+                // 취소 요청 확인
+                if (_cancellationTokenSource.IsCancellationRequested)
+                {
+                    _isRegeneratingPaths = false;
+                    EditorUtility.DisplayDialog("Operation Cancelled", 
+                        "Path regeneration was cancelled during processing.", 
+                        "OK");
+                    return;
+                }
+                
+                // 최종 메시 업데이트 메시지
+                UpdateProgress(0.9f, "메시 업데이트 완료 중...");
                 
                 // Force an update to the mesh to ensure everything is applied
                 _generator.UpdateMesh();
                 
+                // 상태 초기화
+                _isRegeneratingPaths = false;
+                
+                // 결과 메시지 표시
                 if (success)
                 {
-                    Debug.Log("Successfully regenerated paths");
+                    EditorUtility.DisplayDialog("Path Regeneration Complete", 
+                        "Successfully regenerated all paths.", 
+                        "OK");
                 }
                 else
                 {
-                    Debug.LogWarning("Failed to regenerate some paths");
+                    EditorUtility.DisplayDialog("Path Regeneration Warning", 
+                        "Some paths could not be regenerated optimally.", 
+                        "OK");
                 }
+            }
+            catch (System.Exception ex)
+            {
+                // 오류 발생 시 진행 상태 표시창 닫기
+                _isRegeneratingPaths = false;
+                EditorUtility.DisplayDialog("Error", 
+                    $"An error occurred during path regeneration: {ex.Message}", 
+                    "OK");
+                Debug.LogException(ex);
             }
             finally
             {
+                // 최종 진행 상태 초기화
+                _isRegeneratingPaths = false;
+                
                 // Clean up all temporary colliders
                 foreach (var collider in tempColliders)
                 {
@@ -1331,6 +1525,23 @@ namespace InstantPipes
             
             // Force scene update
             SceneView.RepaintAll();
+        }
+        
+        // 진행 상태 업데이트 메서드
+        private void UpdateProgress(float progress, string text)
+        {
+            _currentProgressValue = progress;
+            _currentProgressText = text;
+            
+            // UI 즉시 업데이트
+            Repaint();
+            
+            // Unity 에디터 이벤트 처리 (UI 응답성 유지)
+            if (Event.current != null)
+                EditorApplication.QueuePlayerLoopUpdate();
+            
+            // 약간의 대기 시간으로 UI 갱신을 위한 여유 제공
+            System.Threading.Thread.Sleep(10);
         }
     }
     

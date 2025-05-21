@@ -10,7 +10,7 @@ namespace Model
     {
         public float[][] SpaceCoords;
         public List<float[][]> ObstacleCoords;
-        public int Dim;
+        public int Dim = 3;
         public List<Vector3> PhyVertex;
         public Dictionary<string, float> EdgeCost;
         public List<(Vector3, string)> Directions;
@@ -20,7 +20,7 @@ namespace Model
         public Dictionary<string, int> CloseSet;
         public Node Start;
         public float Radius, Delta;
-        public bool UseDiagonals = true; // 대각선 사용 여부를 제어하는 옵션
+        public bool UseDiagonals = false; // 대각선 사용 여부를 제어하는 옵션
 
         // float[] 배열을 Vector3로 변환하는 헬퍼 메서드
         private Vector3 FloatArrayToVector3(float[] array)
@@ -113,7 +113,7 @@ namespace Model
                 Directions.Add((new Vector3(0, 0, -1), "-z")); // 뒤
                 
                 // 대각선 방향 추가 (UseDiagonals가 true일 경우)
-                if (UseDiagonals && false)
+                if (UseDiagonals)
                 {
                     // X-Y 평면 대각선 (4개)
                     Directions.Add((new Vector3(1, 1, 0), "+x+y"));   // 우상
@@ -356,11 +356,11 @@ namespace Model
                         }
                         
                         // 장애물과의 거리가 매우 가까우면 (반경의 3배 이내) 높은 비용 설정
-                        if (distance < Radius * 3)
+                        if (distance < Radius * 1.5f)
                         {
                             isNearObstacle = true;
                             // 거리가 가까울수록 비용 증가 (최대 10배까지)
-                            float distanceFactor = 1 - (distance / (Radius * 3));
+                            float distanceFactor = 1 - (distance / (Radius * 1.5f));
                             float additionalCost = edgeCost * 9 * distanceFactor;
                             cost += additionalCost;
                             

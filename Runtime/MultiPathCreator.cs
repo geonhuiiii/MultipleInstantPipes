@@ -49,16 +49,16 @@ namespace InstantPipes
             }
             
             // 바운딩 박스 주변에 여유 공간 추가
-            float padding = 10f;
+            float padding = 3f;
             minX -= padding; minY -= padding; minZ -= padding;
             maxX += padding; maxY += padding; maxZ += padding;
             
-            Debug.Log($"바운딩 박스 계산 완료: Min({minX}, {minY}, {minZ}), Max({maxX}, {maxY}, {maxZ})");
+            Debug.Log($"바운딩 박스 계산 완료: Min({minX}, {minY}, {minZ}), Max({maxX}, {Height+maxY}, {maxZ})");
             
             // AStar 알고리즘에 필요한 공간 좌표
             float[][] spaceCoords = new float[][] {
                 new float[] { minX, minY, minZ },
-                new float[] { maxX, maxY, maxZ }
+                new float[] { maxX, Height+maxY, maxZ }
             };
             
             // 장애물 탐색 (Scene에서 모든 콜라이더 찾기)
