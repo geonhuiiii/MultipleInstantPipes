@@ -8,29 +8,20 @@ namespace Model
 {
     public class DecompositionHeuristic : AStar
     {
-        public int MaxIt;
         public List<( (Vector3, string), (Vector3, string), float, float )> Pipes;
         public int NPipes;
         public List<HashSet<(string, string)>> CoveringListN;
         public List<List<(Vector3, string)>> PathN;
         public List<List<(Vector3, string)>> BendPointsN;
-        
-        // 새로 추가된 필드
-        public List<string> IndexCategory;
-        public List<List<List<(string, string)>>> CovConflict;
-        public float[,] CovConflictNum;
-        public HashSet<(string, string)> CovConflictSet;
 
         public DecompositionHeuristic(
             int maxit,
             float[][] spaceCoords,
             List<float[][]> obstacleCoords,
             List<( (float[], string), (float[], string), float, float )> pipes,
-            float wPath, float wBend, float wEnergy, int minDisBend,
-            List<string> indexCategory = null
-        ) : base(spaceCoords, obstacleCoords, wPath, wBend, wEnergy, minDisBend)
+            float wPath, float wBend, float wEnergy, int minDisBend
+        ) : base(maxit, spaceCoords, obstacleCoords, wPath, wBend, wEnergy, minDisBend)
         {
-            MaxIt = maxit;
             // 파이프 리스트 변환
             Pipes = new List<((Vector3, string), (Vector3, string), float, float)>();
             foreach (var pipe in pipes)
@@ -43,30 +34,9 @@ namespace Model
                 ));
             }
             NPipes = pipes.Count;
-            
-            // index_category 초기화 - Python 코드와 동일하게 설정
-            if (indexCategory == null)
-            {
-                IndexCategory = new List<string>();
-                int parCount = (int)(0.2f * maxit);
-                int clusterCount = (int)(0.5f * maxit);
-                int seqCount = maxit - parCount - clusterCount;
-                
-                // I_par: 20%, I_cluster: 50%, I_seq: 30%
-                for (int i = 0; i < parCount; i++)
-                    IndexCategory.Add("I_par");
-                for (int i = 0; i < clusterCount; i++)
-                    IndexCategory.Add("I_cluster");
-                for (int i = 0; i < seqCount; i++)
-                    IndexCategory.Add("I_seq");
-            }
-            else
-            {
-                IndexCategory = indexCategory;
-            }
         }
 
-        // float[] 배열을 Vector3로 변환하는 헬퍼 메서드 (AStar에서 상속받았을 수 있으나 명시적으로 재추가)
+        // float[] 배열을 Vector3로 변환하는 헬퍼 메서드
         private Vector3 FloatArrayToVector3(float[] array)
         {
             if (array == null || array.Length < 3)
@@ -77,7 +47,7 @@ namespace Model
             return new Vector3(array[0], array.Length > 2 ? array[1] : 0, array.Length > 2 ? array[2] : array[1]);
         }
 
-        // Vector3를 float[] 배열로 변환하는 헬퍼 메서드 (AStar에서 상속받았을 수 있으나 명시적으로 재추가)
+        // Vector3를 float[] 배열로 변환하는 헬퍼 메서드
         private float[] Vector3ToFloatArray(Vector3 vector)
         {
             return new float[] { vector.x, vector.y, vector.z };
@@ -133,246 +103,346 @@ namespace Model
             return res;
         }
 
-        // MainRun 메서드 수정 - Python 코드의 main_run 구현
+        // MainRun 메서드 수정 - 파이프 간 근접 가중치 적용
         public (List<List<(Vector3, string)>> pathN, List<List<(Vector3, string)>> bendPointsN) MainRun()
         {
-            int stop = 0;
-            int it = 0;
-            var Kit = new List<((Vector3, string), (Vector3, string), float, float)>(Pipes);
-            var Kbar = new List<((Vector3, string), (Vector3, string), float, float)>(Pipes);
-            
             PathN = new List<List<(Vector3, string)>>();
             BendPointsN = new List<List<(Vector3, string)>>();
             CoveringListN = new List<HashSet<(string, string)>>();
             
-            // 중첩 리스트 초기화
-            for (int i = 0; i < NPipes; i++)
+            // 파이프 생성 시간 기록 (충돌 시 우선순위 결정용)
+            var pipeCreationTimes = new Dictionary<int, float>();
+            float currentTime = 0;
+            
+            // 첫 번째 단계: 모든 파이프에 대한 초기 경로 생성
+            for (int k = 0; k < NPipes; k++)
             {
-                PathN.Add(new List<(Vector3, string)>());
-                BendPointsN.Add(new List<(Vector3, string)>());
-                CoveringListN.Add(new HashSet<(string, string)>());
-            }
-            
-            List<List<(Vector3, string)>> bendPointsNInit = null;
-            
-            // 충돌 정보를 위한 리스트 초기화
-            CovConflict = new List<List<List<(string, string)>>>();
-            for (int i = 0; i < NPipes; i++)
-            {
-                CovConflict.Add(new List<List<(string, string)>>());
-                for (int j = 0; j < NPipes; j++)
-                {
-                    CovConflict[i].Add(new List<(string, string)>());
-                }
-            }
-            
-            Debug.Log($"MainRun 시작: 최대 반복 횟수 {MaxIt}, 파이프 수 {NPipes}");
-            
-            while (stop == 0 && it < MaxIt)
-            {
-                Debug.Log($"반복 {it}: 카테고리 {IndexCategory[it]}");
+                Debug.Log($"파이프 {k} 경로 생성 시작");
                 
-                // I_seq 모드에서는 모든 파이프를 다시 처리
-                if (IndexCategory[it] == "I_seq")
-                {
-                    Kit = new List<((Vector3, string), (Vector3, string), float, float)>(Pipes);
-                    Kbar = new List<((Vector3, string), (Vector3, string), float, float)>(Pipes);
-                }
-                
-                // Kit의 각 파이프에 대해 경로 계산
-                foreach (var pipeK in Kit)
-                {
-                    int k = GetPipeIndex(pipeK);
-                    Debug.Log($"파이프 {k} 처리 중");
-                    
-                    // 파이프 경로 계산
-                    var (bendPointsK, pathK) = Run(pipeK.Item1, pipeK.Item2, pipeK.Item3, pipeK.Item4);
-                    
-                    // 탐색 설정 초기화
-                    ReInit();
-                    
-                    // 계산된 경로 저장
-                    PathN[k] = pathK;
-                    BendPointsN[k] = bendPointsK;
-                    CoveringListN[k] = GetCoveringList(pathK, pipeK.Item3, pipeK.Item4);
-                    
-                    // I_seq 모드에서는 순차적으로 엣지 비용 업데이트
-                    if (IndexCategory[it] == "I_seq")
-                    {
-                        Kbar.Remove(pipeK);
-                        foreach (var item in Kbar)
-                        {
-                            int indexItem = GetPipeIndex(item);
-                            if (CoveringListN[indexItem].Count > 0)
-                            {
-                                var edges = CoveringListN[k].Intersect(CoveringListN[indexItem]).ToList();
-                                UpdateCost(edges, 10.0f);
-                            }
-                        }
-                    }
-                }
-                
-                // 초기 굽힘 포인트 저장 (첫 반복에서만)
-                if (it == 0)
-                {
-                    bendPointsNInit = new List<List<(Vector3, string)>>(BendPointsN);
-                }
-                
-                // 충돌 검사
-                for (int i = 0; i < NPipes; i++)
-                {
-                    for (int j = 0; j < NPipes; j++)
-                    {
-                        CovConflict[i][j].Clear();
-                    }
-                }
-                
-                foreach (var pipeK in Kit)
-                {
-                    int k = GetPipeIndex(pipeK);
-                    foreach (var pipeKPrime in Pipes)
-                    {
-                        int kPrime = GetPipeIndex(pipeKPrime);
-                        if (k != kPrime)
-                        {
-                            CovConflict[k][kPrime] = CoveringListN[k].Intersect(CoveringListN[kPrime]).ToList();
-                        }
-                    }
-                }
-                
-                // 충돌 수치화
-                CovConflictNum = new float[NPipes, NPipes];
-                for (int i = 0; i < NPipes; i++)
-                {
-                    for (int j = 0; j < NPipes; j++)
-                    {
-                        CovConflictNum[i, j] = CovConflict[i][j].Count;
-                    }
-                }
-                
-                string conflictDebug = "충돌 매트릭스: \n";
-                for (int i = 0; i < NPipes; i++)
-                {
-                    for (int j = 0; j < NPipes; j++)
-                    {
-                        conflictDebug += $"{CovConflictNum[i, j] / 6.0f:F2} ";
-                    }
-                    conflictDebug += "\n";
-                }
-                Debug.Log(conflictDebug);
-                
-                // 충돌 여부에 따라 전략 적용
-                if (!IsEmptyNestedList(CovConflict))
-                {
-                    stop = 0;
-                    
-                    // I_par 모드: 병렬 전략 (모든 충돌 엣지에 비용 적용)
-                    if (IndexCategory[it] == "I_par")
-                    {
-                        CovConflictSet = new HashSet<(string, string)>();
-                        for (int k = 0; k < CovConflict.Count; k++)
-                        {
-                            for (int l = 0; l < CovConflict[k].Count; l++)
-                            {
-                                foreach (var item in CovConflict[k][l])
-                                {
-                                    CovConflictSet.Add(item);
-                                }
-                            }
-                        }
-                        UpdateCost(CovConflictSet.ToList(), 30.0f);
-                        Debug.Log($"I_par 모드: {CovConflictSet.Count}개 충돌 엣지에 비용 30 적용");
-                    }
-                    
-                    // I_cluster 모드: 클러스터 전략 (우선순위에 따라 파이프 선택)
-                    if (IndexCategory[it] == "I_cluster")
-                    {
-                        var KitNext = new HashSet<((Vector3, string), (Vector3, string), float, float)>();
-                        foreach (var pipeI in Kit)
-                        {
-                            int i = GetPipeIndex(pipeI);
-                            foreach (var pipeJ in Pipes)
-                            {
-                                int j = GetPipeIndex(pipeJ);
-                                if (CovConflict[i][j].Count > 0)
-                                {
-                                    if (CmpPriority(pipeI, pipeJ))
-                                    {
-                                        KitNext.Add(pipeJ);
-                                    }
-                                    else
-                                    {
-                                        KitNext.Add(pipeI);
-                                    }
-                                }
-                            }
-                        }
-                        
-                        var conflictEdges = new HashSet<(string, string)>();
-                        foreach (var pipeK in KitNext)
-                        {
-                            int k = GetPipeIndex(pipeK);
-                            foreach (var pipeKPrime in Pipes)
-                            {
-                                int kPrime = GetPipeIndex(pipeKPrime);
-                                if (!KitNext.Contains(pipeKPrime) && CovConflict[k][kPrime].Count > 0)
-                                {
-                                    foreach (var item in CovConflict[k][kPrime])
-                                    {
-                                        conflictEdges.Add(item);
-                                    }
-                                }
-                            }
-                        }
-                        
-                        UpdateCost(conflictEdges.ToList(), 100.0f);
-                        Debug.Log($"I_cluster 모드: {conflictEdges.Count}개 충돌 엣지에 비용 100 적용");
-                        
-                        // 다음 반복을 위해 Kit 업데이트
-                        Kit = KitNext.ToList();
-                    }
-                    
-                    it++;
-                }
-                else
-                {
-                    stop = 1;
-                    Debug.Log("충돌이 모두 해결되었습니다.");
-                }
-            }
-            
-            if (it >= MaxIt)
-            {
-                Debug.Log($"최대 반복 횟수({MaxIt})에 도달하여 종료합니다.");
-            }
-            
-            return (PathN, bendPointsNInit != null ? bendPointsNInit : BendPointsN);
-        }
-        
-        // 중첩 리스트가 비어있는지 확인
-        private bool IsEmptyNestedList(List<List<List<(string, string)>>> list)
-        {
-            for (int i = 0; i < list.Count; i++)
-            {
-                for (int j = 0; j < list[i].Count; j++)
-                {
-                    if (list[i][j].Count > 0)
-                    {
-                        return false;
-                    }
-                }
-            }
-            return true;
-        }
+                // 현재 파이프 인덱스를 AStar에 설정
+                var currentPipeIndexField = this.GetType().BaseType.GetField("CurrentPipeIndex", 
+                    System.Reflection.BindingFlags.NonPublic | 
+                    System.Reflection.BindingFlags.Instance);
 
-        // 엣지 리셋 (Python의 reinit 구현)
-        private void ReInit()
-        {
-            // EdgeCost 딕셔너리 리셋
-            EdgeCost.Clear();
+                if (currentPipeIndexField != null)
+                {
+                    currentPipeIndexField.SetValue(this, k);
+                    Debug.Log($"현재 파이프 인덱스 {k}를 AStar에 설정");
+                }
+                
+                // 기존에 생성된 파이프와의 근접성에 따른 가중치 적용
+                if (k > 0 && PathN.Count > 0)
+                {
+                    ApplyProximityWeights(k);
+                }
+                
+                // 엣지 비용 재계산 (임시 장애물 고려)
+                InitEdgeCost(1f);
+                
+                var pipe = Pipes[k];
+                var (bend, path) = Run(pipe.Item1, pipe.Item2, pipe.Item3, pipe.Item4);
+                
+                // 현재 파이프 인덱스 초기화
+                if (currentPipeIndexField != null)
+                {
+                    currentPipeIndexField.SetValue(this, -1);
+                }
+                
+                // 경로 생성 실패 시 기본 직선 경로 생성
+                if (path == null || path.Count == 0)
+                {
+                    Debug.LogWarning($"파이프 {k}의 초기 경로 생성 실패. 직선 경로로 대체합니다.");
+                    path = CreateStraightPath(pipe.Item1, pipe.Item2);
+                    bend = CreateStraightBendPath(pipe.Item1, pipe.Item2);
+                }
+                
+                Debug.Log($"파이프 {k} 경로 생성 완료: {path.Count}개 포인트");
+                PathN.Add(path);
+                BendPointsN.Add(bend);
+                CoveringListN.Add(GetCoveringList(path, pipe.Item3, pipe.Item4));
+                
+                // 파이프 생성 시간 기록 (충돌 처리 시 우선순위 결정에 사용)
+                pipeCreationTimes[k] = currentTime;
+                currentTime += 1.0f;
+            }
+            
+            // 초기 경로 유효성 검증
+            ValidateAllPaths();
+            
+            // 충돌 검사 및 비용 업데이트 구현
+            int maxCollisionResolveAttempts = 25; // 최대 충돌 해결 시도 횟수
+            bool hasCollisions = true;
+            int attemptCount = 0;
+            
+            // 파이프 간의 높이 조정 기록 (중복 조정 방지)
+            var heightAdjustments = new Dictionary<string, float>();
+            
+            while (hasCollisions && attemptCount < maxCollisionResolveAttempts)
+            {
+                attemptCount++;
+                
+                // 모든 파이프 쌍에 대해 충돌 검사 및 근접 검사
+                var collisionDetails = new List<(int pipe1, int pipe2, int edgeCount, float severity)>();
+                var proximityPairs = new List<(int pipe1, int pipe2, float distance, float threshold)>();
+                
+                // 공간 분할을 위한 그리드 기반 접근
+                var pipeGrids = new Dictionary<string, List<int>>();
+                
+                Debug.Log("NPipes  " + NPipes.ToString());
+                // 각 파이프를 대략적인 공간 그리드에 할당
+                for (int i = 0; i < NPipes; i++)
+                {
+                    if (PathN[i] == null || PathN[i].Count == 0) continue;
+                    var startPoint = PathN[i][0].Item1;
+                    var endPoint = PathN[i][PathN[i].Count - 1].Item1;
+                    
+                    int gridSize = 1;
+                    
+                    // 그리드 셀 계산
+                    int startX = (int)(startPoint.x / gridSize);
+                    int startY = (int)(startPoint.y / gridSize);
+                    int startZ = startPoint.z > 0 ? (int)(startPoint.z / gridSize) : 0;
+                    
+                    int endX = (int)(endPoint.x / gridSize);
+                    int endY = (int)(endPoint.y / gridSize);
+                    int endZ = endPoint.z > 0 ? (int)(endPoint.z / gridSize) : 0;
+                    
+                    // 바운딩 박스 계산
+                    int minX = Math.Min(startX, endX);
+                    int maxX = Math.Max(startX, endX);
+                    int minY = Math.Min(startY, endY);
+                    int maxY = Math.Max(startY, endY);
+                    int minZ = Math.Min(startZ, endZ);
+                    int maxZ = Math.Max(startZ, endZ);
+                    
+                    // 해당 파이프의 반경을 고려하여 그리드 확장
+                    float pipeRadius = Pipes[i].Item3;
+                    int radiusGrids = (int)Math.Ceiling(pipeRadius * 3);
+                    
+                    for (int x = minX - radiusGrids; x <= maxX + radiusGrids; x++)
+                    for (int y = minY - radiusGrids; y <= maxY + radiusGrids; y++)
+                    for (int z = minZ - radiusGrids; z <= maxZ + radiusGrids; z++)
+                    {
+                        string gridKey = $"{x},{y},{z}";
+                        if (!pipeGrids.ContainsKey(gridKey))
+                            pipeGrids[gridKey] = new List<int>();
+                        pipeGrids[gridKey].Add(i);
+                    }
+                }
+                
+                // 동일한 그리드 셀에 있는 파이프들 간의 검사
+                var checkedPairs = new HashSet<string>();
+                
+                foreach (var grid in pipeGrids)
+                {
+                    var pipesInGrid = grid.Value;
+                    
+                    for (int idx1 = 0; idx1 < pipesInGrid.Count; idx1++)
+                    {
+                        int i = pipesInGrid[idx1];
+                        
+                        for (int idx2 = idx1 + 1; idx2 < pipesInGrid.Count; idx2++)
+                        {
+                            int j = pipesInGrid[idx2];
+                            
+                            // 이미 검사한 쌍인지 확인
+                            string pairKey = i < j ? $"{i}:{j}" : $"{j}:{i}";
+                            if (checkedPairs.Contains(pairKey)) continue;
+                            checkedPairs.Add(pairKey);
+                            
+                            if (PathN[i] == null || PathN[j] == null) continue;
+                            
+                            // 두 경로 간 최소 거리 계산
+                            float minDistance = CalculateMinDistanceBetweenPaths(PathN[i], PathN[j]);
+                            
+                            // 두 파이프 반경의 합 * 3 계산 (근접 임계값)
+                            float radiusI = Pipes[i].Item3;
+                            float radiusJ = Pipes[j].Item3;
+                            float proximityThreshold = (radiusI + radiusJ) * 2.0f;
+                            
+                            // 충돌 검사 (실제 충돌하는 경우) - 임계값을 더 엄격하게 설정
+                            float actualCollisionThreshold = (radiusI + radiusJ) * 1.05f; // 10% 여유 공간
+                            if (minDistance < actualCollisionThreshold)
+                            {
+                                var conflictEdges = FindConflictEdges(PathN[i], PathN[j]);
+                                if (conflictEdges.Count > 0)
+                                {
+                                    // 충돌 심각도 계산
+                                    float severity = conflictEdges.Count * (radiusI + radiusJ) * (actualCollisionThreshold - minDistance);
+                                    collisionDetails.Add((i, j, conflictEdges.Count, severity));
+                                    Debug.Log($"파이프 {i}와 {j} 사이에 실제 충돌 감지: 거리={minDistance:F2}, 임계값={actualCollisionThreshold:F2}, 충돌 엣지={conflictEdges.Count}개, 심각도={severity:F2}");
+                                }
+                                else
+                                {
+                                    Debug.Log($"파이프 {i}와 {j} 사이 거리가 가깝지만({minDistance:F2} < {actualCollisionThreshold:F2}) 충돌 엣지는 없음");
+                                }
+                            }
+                            // 근접 검사 (충돌은 아니지만 가까운 경우)
+                            else if (minDistance < proximityThreshold)
+                            {
+                                proximityPairs.Add((i, j, minDistance, proximityThreshold));
+                                Debug.Log($"파이프 {i}와 {j} 사이 거리({minDistance:F2})가 임계값({proximityThreshold:F2}) 미만");
+                            }
+                        }
+                    }
+                }
+                
+                // 가까운 파이프 쌍에 대해 가중치 적용
+                foreach (var (pipe1, pipe2, distance, threshold) in proximityPairs)
+                {
+                    // 거리에 반비례하는 가중치 계산 (거리가 가까울수록 더 높은 가중치)
+                    float proximityFactor = 1.0f - (distance / threshold);
+                    float weightMultiplier = 1.0f + (4.0f * proximityFactor); // 최대 5배까지 증가
+                    
+                    Debug.Log($"파이프 {pipe1}와 {pipe2} 사이 근접성 가중치 적용: 거리={distance:F2}, 가중치={weightMultiplier:F2}배");
+                    
+                    // 두 파이프 모두에 가중치 적용 (더 나중에 생성된 파이프에 더 높은 가중치)
+                    int newerPipe = pipeCreationTimes[pipe1] < pipeCreationTimes[pipe2] ? pipe2 : pipe1;
+                    ApplyProximityWeightsBetweenPaths(newerPipe, PathN[pipe1], PathN[pipe2], weightMultiplier);
+                }
+                
+                // 심각도에 따라 충돌 정렬
+                collisionDetails.Sort((a, b) => b.severity.CompareTo(a.severity));
+                var collisions = collisionDetails.Select(c => (c.pipe1, c.pipe2)).ToList();
+                
+                // 충돌 요약 출력
+                if (collisionDetails.Count > 0)
+                {
+                    Debug.Log($"충돌 요약 (심각도 순):");
+                    foreach (var (pipe1, pipe2, count, severity) in collisionDetails)
+                    {
+                        Debug.Log($"  파이프 {pipe1}-{pipe2}: {count}개 충돌, 심각도 {severity:F2}");
+                    }
+                }
+                
+                // 충돌이 없으면 루프 종료
+                if (collisions.Count == 0)
+                {
+                    hasCollisions = false;
+                    Debug.Log($"충돌 해결 완료: {attemptCount}번 시도 후 모든 충돌이 해결됨");
+                    break;
+                }
+                
+                Debug.Log($"충돌 해결 시도 {attemptCount}: {collisions.Count}개의 충돌 쌍 발견");
+                
+                // 충돌 해결 전략 구현
+                foreach (var (i, j) in collisions)
+                {
+                    // 기존 로직대로 높이 조정 및 경로 재계산
+                    int olderPipe = pipeCreationTimes[i] < pipeCreationTimes[j] ? i : j;
+                    int newerPipe = olderPipe == i ? j : i;
+                    
+                    string adjustmentKey = olderPipe < newerPipe ? $"{olderPipe}:{newerPipe}" : $"{newerPipe}:{olderPipe}";
+                    
+                    if (!heightAdjustments.ContainsKey(adjustmentKey))
+                    {
+                        // 높이 조정 전에 경로 생성 순서 변경 시도
+                        bool orderChangeResolved = false;
+                        
+                        // 경로 생성 순서 변경 시도를 기록하는 딕셔너리
+                        string orderChangeKey = $"OrderChange_{adjustmentKey}";
+                        bool alreadyTriedOrderChange = heightAdjustments.ContainsKey(orderChangeKey);
+                        
+                        if (!alreadyTriedOrderChange)
+                        {
+                            Debug.Log($"파이프 {olderPipe}와 {newerPipe} 사이 충돌 발생. 경로 생성 순서 변경 시도.");
+                            
+                            // 기존 파이프 정보 백업
+                            var oldPipeInfo_old = Pipes[olderPipe];
+                            var oldPipeInfo_new = Pipes[newerPipe];
+                            
+                            // 경로 생성 순서 바꾸기 (생성 시간 조정)
+                            float tempTime = pipeCreationTimes[olderPipe];
+                            pipeCreationTimes[olderPipe] = pipeCreationTimes[newerPipe] + 0.1f; // 더 나중에 생성된 것으로 변경
+                            
+                            // 경로 순서를 바꾸어 재계산 (먼저 새 파이프(newer)의 경로를 생성하고, 후에 기존 파이프(older)의 경로 생성)
+                            RecalculatePipePath(newerPipe);
+                            RecalculatePipePath(olderPipe);
+                            
+                            // 순서 변경 시도를 기록
+                            heightAdjustments[orderChangeKey] = 1f;
+                            
+                            // 충돌이 해결되었는지 확인
+                            List<(string, string)> remainingConflicts = FindConflictEdges(PathN[olderPipe], PathN[newerPipe]);
+                            
+                            if (remainingConflicts.Count == 0)
+                            {
+                                Debug.Log($"경로 생성 순서 변경으로 파이프 {olderPipe}와 {newerPipe} 사이의 충돌이 해결되었습니다.");
+                                orderChangeResolved = true;
+                            }
+                            else
+                            {
+                                Debug.LogWarning($"경로 생성 순서 변경으로 충돌이 해결되지 않았습니다. 충돌 엣지: {remainingConflicts.Count}개");
+                                
+                                // 충돌이 해결되지 않았으면 높이 조정 방식으로 진행
+                                orderChangeResolved = false;
+                            }
+                        }
+                        
+                        // 순서 변경으로 해결되지 않은 경우 높이 조정을 적용
+                        if (!orderChangeResolved)
+                        {
+                            float olderPipeRadius = Pipes[olderPipe].Item3;
+                            float newerPipeRadius = Pipes[newerPipe].Item3;
+                            float heightAdjustment = (olderPipeRadius + newerPipeRadius) * 2f;
+                            
+                            var olderPipe_start = Pipes[olderPipe].Item1;
+                            var olderPipe_end = Pipes[olderPipe].Item2;
+                            
+                            Debug.Log($"경로 생성 순서 변경으로 해결되지 않아 파이프 {olderPipe}의 높이를 {heightAdjustment} 만큼 증가시킵니다.");
+                            
+                            Vector3 adjustedStartPos = new Vector3(
+                                olderPipe_start.Item1.x,
+                                olderPipe_start.Item1.y + heightAdjustment,
+                                olderPipe_start.Item1.z
+                            );
+                            
+                            Vector3 adjustedEndPos = new Vector3(
+                                olderPipe_end.Item1.x,
+                                olderPipe_end.Item1.y + heightAdjustment,
+                                olderPipe_end.Item1.z
+                            );
+                            
+                            Pipes[olderPipe] = (
+                                (adjustedStartPos, olderPipe_start.Item2), 
+                                (adjustedEndPos, olderPipe_end.Item2),
+                                olderPipeRadius,
+                                Pipes[olderPipe].Item4
+                            );
+                            
+                            heightAdjustments[adjustmentKey] = heightAdjustment;
+                            
+                            // 두 파이프 모두 경로 재계산
+                            RecalculatePipePath(olderPipe);
+                            RecalculatePipePath(newerPipe);
+                        }
+                    }
+                    else
+                    {
+                        Debug.Log($"파이프 {olderPipe}와 {newerPipe}는 이미 높이 조정을 했지만 여전히 충돌합니다. 경로 비용 조정.");
+                        
+                        // 충돌 엣지에 대한 비용 증가 (더 높은 가중치 적용)
+                        UpdateEdgeCostForCollision(olderPipe, PathN[i], PathN[j], 8.0f); // 가중치 증가
+                        UpdateEdgeCostForCollision(newerPipe, PathN[i], PathN[j], 10.0f); // 더 높은 가중치
+                        
+                        RecalculatePipePath(olderPipe);
+                        RecalculatePipePath(newerPipe);
+                    }
+                }
+            }
+            
+            if (attemptCount >= maxCollisionResolveAttempts && hasCollisions)
+            {
+                Debug.LogWarning($"최대 시도 횟수({maxCollisionResolveAttempts})에 도달했습니다. 모든 충돌이 해결되지 않았을 수 있습니다.");
+            }
+            
+            // 최종 검증: 모든 파이프의 최종 경로 유효성 확인
+            ValidateAllPaths();
+            
+            return (PathN, BendPointsN);
         }
         
-        // 두 경로 간 최소 거리 계산 메서드
+        // 두 경로 간 최소 거리 계산 메서드 개선
         private float CalculateMinDistanceBetweenPaths(List<(Vector3, string)> path1, List<(Vector3, string)> path2)
         {
             if (path1 == null || path1.Count == 0 || path2 == null || path2.Count == 0)
@@ -380,20 +450,108 @@ namespace Model
                 
             float minDistance = float.MaxValue;
             
-            // 두 경로의 모든 점 쌍에 대해 거리 계산
-            for (int i = 0; i < path1.Count; i++)
+            // 경로의 선분 간 최소 거리 계산 (단순 점 거리가 아닌 선분 거리)
+            for (int i = 0; i < path1.Count - 1; i++)
             {
-                for (int j = 0; j < path2.Count; j++)
+                Vector3 p1Start = path1[i].Item1;
+                Vector3 p1End = path1[i + 1].Item1;
+                
+                for (int j = 0; j < path2.Count - 1; j++)
                 {
-                    float distance = Vector3.Distance(path1[i].Item1, path2[j].Item1);
-                    if (distance < minDistance)
+                    Vector3 p2Start = path2[j].Item1;
+                    Vector3 p2End = path2[j + 1].Item1;
+                    
+                    // 두 선분 간의 최단 거리 계산
+                    float segmentDistance = CalculateDistanceBetweenSegments(p1Start, p1End, p2Start, p2End);
+                    
+                    if (segmentDistance < minDistance)
                     {
-                        minDistance = distance;
+                        minDistance = segmentDistance;
+                    }
+                }
+            }
+            
+            // 추가로 모든 점 쌍 간의 거리도 확인 (안전장치)
+            foreach (var point1 in path1)
+            {
+                foreach (var point2 in path2)
+                {
+                    float pointDistance = Vector3.Distance(point1.Item1, point2.Item1);
+                    if (pointDistance < minDistance)
+                    {
+                        minDistance = pointDistance;
                     }
                 }
             }
             
             return minDistance;
+        }
+        
+        // 두 선분 간의 최단 거리 계산
+        private float CalculateDistanceBetweenSegments(Vector3 p1, Vector3 q1, Vector3 p2, Vector3 q2)
+        {
+            Vector3 d1 = q1 - p1; // 첫 번째 선분의 방향 벡터
+            Vector3 d2 = q2 - p2; // 두 번째 선분의 방향 벡터
+            Vector3 r = p1 - p2;  // 두 선분의 시작점 간 벡터
+            
+            float a = Vector3.Dot(d1, d1); // |d1|^2
+            float e = Vector3.Dot(d2, d2); // |d2|^2
+            float f = Vector3.Dot(d2, r);
+            
+            // 두 선분이 모두 점인 경우
+            if (a <= Mathf.Epsilon && e <= Mathf.Epsilon)
+            {
+                return Vector3.Distance(p1, p2);
+            }
+            
+            float s, t;
+            
+            // 첫 번째 선분이 점인 경우
+            if (a <= Mathf.Epsilon)
+            {
+                s = 0.0f;
+                t = f / e; // t = (p1 - p2) · d2 / |d2|^2
+                t = Mathf.Clamp01(t);
+            }
+            // 두 번째 선분이 점인 경우
+            else if (e <= Mathf.Epsilon)
+            {
+                t = 0.0f;
+                s = Mathf.Clamp01(-Vector3.Dot(r, d1) / a);
+            }
+            else
+            {
+                // 일반적인 경우
+                float b = Vector3.Dot(d1, d2);
+                float denom = a * e - b * b; // |d1|^2 * |d2|^2 - (d1 · d2)^2
+                
+                if (denom != 0.0f)
+                {
+                    s = Mathf.Clamp01((b * f - Vector3.Dot(r, d1) * e) / denom);
+                }
+                else
+                {
+                    s = 0.0f;
+                }
+                
+                t = (b * s + f) / e;
+                
+                if (t < 0.0f)
+                {
+                    t = 0.0f;
+                    s = Mathf.Clamp01(-Vector3.Dot(r, d1) / a);
+                }
+                else if (t > 1.0f)
+                {
+                    t = 1.0f;
+                    s = Mathf.Clamp01((b - Vector3.Dot(r, d1)) / a);
+                }
+            }
+            
+            Vector3 c1 = p1 + d1 * s;
+            Vector3 c2 = p2 + d2 * t;
+            
+            return Vector3.Distance(c1, c2);
         }
         
         // 새 파이프를 생성할 때 기존 파이프와의 근접성에 대한 가중치 적용
@@ -411,7 +569,7 @@ namespace Model
                 if (PathN[i] == null || PathN[i].Count == 0) continue;
                 
                 float existingPipeRadius = Pipes[i].Item3;
-                float proximityThreshold = (newPipeRadius + existingPipeRadius) * 3.0f;
+                float proximityThreshold = (newPipeRadius + existingPipeRadius) * 1.5f;
                 
                 // 새 파이프의 시작점/끝점과 기존 경로 간의 거리 계산
                 float minStartDistance = float.MaxValue;
@@ -478,9 +636,9 @@ namespace Model
                 {
                     float currentCost = EdgeCost[edgeKey];
                     EdgeCost[edgeKey] = currentCost * weightMultiplier;
-                }
-                else
-                {
+                        }
+                        else
+                        {
                     // 엣지 비용이 없는 경우, 기본값에 가중치 적용
                     EdgeCost[edgeKey] = 1.0f * weightMultiplier;
                 }
@@ -491,7 +649,7 @@ namespace Model
         private void ApplyProximityWeightsBetweenPaths(int targetPipeIndex, List<(Vector3, string)> path1, List<(Vector3, string)> path2, float weightMultiplier)
         {
             float pipeRadius = Pipes[targetPipeIndex].Item3;
-            float searchRadius = pipeRadius * 3.0f;
+            float searchRadius = pipeRadius * 1.5f;
             
             Debug.Log($"파이프 {targetPipeIndex}에 주변 파이프와의 근접성 가중치 적용 (가중치: {weightMultiplier:F2}배)");
             
@@ -600,10 +758,31 @@ namespace Model
             var pipe = Pipes[pipeIndex];
             
             Debug.Log($"파이프 {pipeIndex} 경로 재계산 시작: {pipe.Item1.Item1} -> {pipe.Item2.Item1}");
+
+            // 현재 파이프 인덱스를 AStar에 전달하기 위한 필드 설정
+            var currentPipeIndexField = this.GetType().BaseType.GetField("CurrentPipeIndex", 
+                System.Reflection.BindingFlags.NonPublic | 
+                System.Reflection.BindingFlags.Instance | 
+                System.Reflection.BindingFlags.CreateInstance);
+
+            if (currentPipeIndexField != null)
+            {
+                currentPipeIndexField.SetValue(this, pipeIndex);
+                Debug.Log($"현재 파이프 인덱스 {pipeIndex}를 AStar에 전달");
+            }
+            
+            // 엣지 비용 재계산 (임시 장애물 및 기존 경로 고려)
+            InitEdgeCost(1f);
             
             // 공간을 더 넓혀서 탐색 (높이 제한 완화)
             // AStar 알고리즘의 IsEnoughSpace 메서드가 더 넓은 공간을 탐색하도록 임시 설정
             var (newBend, newPath) = Run(pipe.Item1, pipe.Item2, pipe.Item3, pipe.Item4);
+            
+            // 파이프 인덱스 필드 초기화
+            if (currentPipeIndexField != null)
+            {
+                currentPipeIndexField.SetValue(this, -1);
+            }
             
             // 경로 생성 실패 시 대체 경로 생성
             if (newPath == null || newPath.Count == 0)
@@ -956,98 +1135,108 @@ namespace Model
             return result;
         }
 
-        // GetNearbyPipes 메서드 구현 - 기존 파이프 정보 제공
+        // GetNearbyPipes 메서드 구현 - 현재 파이프보다 앞서 생성된 파이프 정보만 제공
         protected override List<PipeInfo> GetNearbyPipes()
         {
             var pipeInfoList = new List<PipeInfo>();
             
-            // 모든 생성된 파이프의 정보 수집
-            for (int i = 0; i < PathN.Count; i++)
+            // 현재 파이프 인덱스 가져오기 (reflection 사용)
+            var currentPipeIndexField = this.GetType().BaseType.GetField("CurrentPipeIndex", 
+                System.Reflection.BindingFlags.NonPublic | 
+                System.Reflection.BindingFlags.Instance);
+            
+            int currentPipeIndex = -1;
+            if (currentPipeIndexField != null)
             {
-                // 빈 경로는 건너뛰기
-                if (PathN[i] == null || PathN[i].Count == 0) continue;
+                currentPipeIndex = (int)currentPipeIndexField.GetValue(this);
+            }
+            
+            Debug.Log($"GetNearbyPipes 호출: 현재 파이프 인덱스 = {currentPipeIndex}, 총 파이프 수 = {Pipes.Count}");
+            
+            // 모든 파이프를 고려 (현재 파이프 제외)
+            for (int i = 0; i < Pipes.Count; i++)
+            {
+                // 현재 생성 중인 파이프는 제외
+                if (i == currentPipeIndex) continue;
                 
-                // 경로의 모든 점을 Vector3 리스트로 변환
                 var points = new List<Vector3>();
-                foreach (var (point, _) in PathN[i])
-                {
-                    points.Add(point);
-                }
-                
-                // 해당 파이프의 반경 가져오기
                 float radius = Pipes[i].Item3;
                 
-                // PipeInfo 객체 생성 및 추가
-                pipeInfoList.Add(new PipeInfo(points, radius));
-                
-                Debug.Log($"파이프 정보 추가: 인덱스 {i}, 포인트 수 {points.Count}, 반경 {radius}");
-            }
-            
-            return pipeInfoList;
-        }
-
-        // 두 파이프의 우선순위 비교 메서드 (Python의 cmp_priority 구현)
-        public bool CmpPriority(((Vector3, string), (Vector3, string), float, float) pipeI, 
-                               ((Vector3, string), (Vector3, string), float, float) pipeJ)
-        {
-            float sumRadiusI = pipeI.Item3 + pipeI.Item4;
-            float sumRadiusJ = pipeJ.Item3 + pipeJ.Item4;
-            
-            if (sumRadiusI > sumRadiusJ)
-            {
-                return true;
-            }
-            else if (Math.Abs(sumRadiusI - sumRadiusJ) < 0.001f) // 부동소수점 비교
-            {
-                return GetPipeIndex(pipeI) > GetPipeIndex(pipeJ);
-            }
-            else
-            {
-                return false;
-            }
-        }
-        
-        // 파이프 인덱스 찾기 (Python의 get_pipe_index 구현)
-        public int GetPipeIndex(((Vector3, string), (Vector3, string), float, float) pipe)
-        {
-            return Pipes.FindIndex(p => 
-                p.Item1.Item1 == pipe.Item1.Item1 && 
-                p.Item1.Item2 == pipe.Item1.Item2 && 
-                p.Item2.Item1 == pipe.Item2.Item1 && 
-                p.Item2.Item2 == pipe.Item2.Item2 && 
-                Math.Abs(p.Item3 - pipe.Item3) < 0.001f && 
-                Math.Abs(p.Item4 - pipe.Item4) < 0.001f);
-        }
-        
-        // 엣지 비용 업데이트 (Python의 update_cost 구현)
-        public void UpdateCost(List<(string, string)> edges, float changeCost)
-        {
-            foreach (var edge in edges)
-            {
-                string key = $"{edge.Item1}:{edge.Item2}";
-                
-                if (EdgeCost.ContainsKey(key))
+                // 이미 경로가 생성된 파이프인 경우 (현재 파이프보다 앞서 생성됨)
+                if (i < PathN.Count && PathN[i] != null && PathN[i].Count > 0)
                 {
-                    EdgeCost[key] += changeCost;
+                    // 실제 생성된 경로의 모든 점 사용
+                    foreach (var (point, _) in PathN[i])
+                    {
+                        points.Add(point);
+                    }
+                    Debug.Log($"기존 경로 파이프 {i}: {points.Count}개 포인트, 반경 {radius}");
                 }
                 else
                 {
-                    EdgeCost[key] = 1.0f + changeCost;
+                    // 아직 경로가 생성되지 않은 파이프인 경우 시작점과 도착점을 임시 장애물로 처리
+                    Vector3 startPoint = Pipes[i].Item1.Item1;
+                    Vector3 endPoint = Pipes[i].Item2.Item1;
+                    
+                    // 시작점과 도착점 주변에 임시 장애물 영역 생성
+                    points.AddRange(CreateTemporaryObstaclePoints(startPoint, radius));
+                    points.AddRange(CreateTemporaryObstaclePoints(endPoint, radius));
+                    
+                    Debug.Log($"임시 장애물 파이프 {i}: 시작점 {startPoint}, 도착점 {endPoint}, 임시 포인트 {points.Count}개, 반경 {radius}");
                 }
+                
+                // PipeInfo 객체 생성 및 추가
+                pipeInfoList.Add(new PipeInfo(points, radius, i));
             }
+            
+            Debug.Log($"총 {pipeInfoList.Count}개의 파이프 정보 반환 (경로 생성된 파이프 + 임시 장애물)");
+            return pipeInfoList;
         }
-
-        // 중첩 리스트가 비어있는지 확인 (Python의 is_empty_list 구현)
-        public bool IsEmptyList<T>(List<List<T>> list)
+        
+        // 특정 점 주변에 임시 장애물 포인트들을 생성
+        private List<Vector3> CreateTemporaryObstaclePoints(Vector3 centerPoint, float radius)
         {
-            foreach (var sublist in list)
+            var obstaclePoints = new List<Vector3>();
+            
+            // 파이프 반경의 2배 영역을 장애물로 설정
+            float obstacleRadius = radius * 2.0f;
+            int gridDensity = Mathf.Max(1, (int)obstacleRadius); // 최소 1, 반경에 비례한 밀도
+            
+            // 중심점 추가
+            obstaclePoints.Add(centerPoint);
+            
+            // 중심점 주변에 격자 형태로 장애물 포인트 생성
+            for (int x = -gridDensity; x <= gridDensity; x++)
             {
-                if (sublist != null && sublist.Count > 0)
+                for (int y = -gridDensity; y <= gridDensity; y++)
                 {
-                    return false;
+                    for (int z = -gridDensity; z <= gridDensity; z++)
+                    {
+                        Vector3 offset = new Vector3(x, y, z);
+                        float distance = offset.magnitude;
+                        
+                        // 장애물 반경 내에 있는 점들만 추가
+                        if (distance <= obstacleRadius)
+                        {
+                            Vector3 obstaclePoint = centerPoint + offset;
+                            obstaclePoints.Add(obstaclePoint);
+                        }
+                    }
                 }
             }
-            return true;
+            
+            // 추가로 주요 방향에 더 많은 포인트 생성 (더 강한 회피 효과)
+            foreach (var dir in Directions)
+            {
+                for (float dist = 0.5f; dist <= obstacleRadius; dist += 0.5f)
+                {
+                    Vector3 directionPoint = centerPoint + dir.Item1 * dist;
+                    obstaclePoints.Add(directionPoint);
+                }
+            }
+            
+            Debug.Log($"임시 장애물 생성: 중심점 {centerPoint}, 반경 {obstacleRadius}, 포인트 수 {obstaclePoints.Count}");
+            return obstaclePoints;
         }
     }
 } 

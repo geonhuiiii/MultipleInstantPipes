@@ -10,13 +10,13 @@ namespace InstantPipes
     [System.Serializable]
     public class MultiPathCreator
     {
-        public float Height = 5;
+        public float Height = 1;
         public float GridRotationY = 0;
         public float GridSize = 3;
         public float Chaos = 0;
         public float StraightPathPriority = 10;
         public float NearObstaclesPriority = 0;
-        public int MaxIterations = 2000;
+        public int MaxIterations = 10000;
         public int MinDistanceBetweenBends = 3;
 
         public bool LastPathSuccess = true;
