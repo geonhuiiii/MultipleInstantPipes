@@ -19,6 +19,12 @@ namespace InstantPipes
         public int MaxIterations = 10000;
         public int MinDistanceBetweenBends = 3;
 
+        // 장애물 필터링 옵션 추가
+        [Header("장애물 필터링 옵션")]
+        public string[] excludeTags = new string[] { "PipeEndpoint", "StartPoint", "EndPoint" }; // 제외할 태그들
+        public LayerMask excludeLayers = 0; // 제외할 레이어들
+        public float endpointExclusionRadius = 2.0f; // 시작점/도착점 주변 제외 반경
+
         public bool LastPathSuccess = true;
 
         // 모든 시작점과 끝점을 한 번에 처리하는 메서드
@@ -62,7 +68,7 @@ namespace InstantPipes
             };
             
             // 장애물 탐색 (Scene에서 모든 콜라이더 찾기)
-            List<float[][]> obstacleCoords = FindObstacles();
+            List<float[][]> obstacleCoords = FindObstacles(pipeConfigs);
             Debug.Log($"장애물 탐색 완료: {obstacleCoords.Count}개의 장애물 발견");
             
             // pipe config 형식 변환
@@ -176,23 +182,104 @@ namespace InstantPipes
         }
         
         // Scene에서 장애물 탐색 (콜라이더를 바운딩 박스로 변환)
-        private List<float[][]> FindObstacles()
+        // 시작점과 도착점이 있는 오브젝트는 제외
+        private List<float[][]> FindObstacles(List<(Vector3 startPosition, Vector3 startNormal, 
+                  Vector3 endPosition, Vector3 endNormal, 
+                  float radius)> pipeConfigs = null)
         {
             List<float[][]> obstacles = new List<float[][]>();
             Collider[] colliders = Object.FindObjectsOfType<Collider>();
+            
+            // 시작점과 도착점 위치 수집 (제외할 오브젝트 판단용)
+            HashSet<Vector3> pipeEndpoints = new HashSet<Vector3>();
+            if (pipeConfigs != null)
+            {
+                foreach (var config in pipeConfigs)
+                {
+                    pipeEndpoints.Add(config.startPosition);
+                    pipeEndpoints.Add(config.endPosition);
+                }
+            }
+            
+            int excludedByTag = 0;
+            int excludedByLayer = 0;
+            int excludedByEndpoint = 0;
+            int totalColliders = colliders.Length;
             
             foreach (var collider in colliders)
             {
                 if (collider.isTrigger) continue;
                 
-                Bounds bounds = collider.bounds;
+                bool shouldExclude = false;
+                string exclusionReason = "";
                 
-                // 바운딩 박스의 최소점과 최대점
-                float[] min = new float[] { bounds.min.x, bounds.min.y, bounds.min.z };
-                float[] max = new float[] { bounds.max.x, bounds.max.y, bounds.max.z };
+                // 1. 태그 기반 제외 검사
+                if (excludeTags != null && excludeTags.Length > 0)
+                {
+                    foreach (string excludeTag in excludeTags)
+                    {
+                        if (!string.IsNullOrEmpty(excludeTag) && collider.CompareTag(excludeTag))
+                        {
+                            shouldExclude = true;
+                            exclusionReason = $"태그 '{excludeTag}'";
+                            excludedByTag++;
+                            break;
+                        }
+                    }
+                }
                 
-                obstacles.Add(new float[][] { min, max });
+                // 2. 레이어 기반 제외 검사
+                if (!shouldExclude && excludeLayers != 0)
+                {
+                    if ((excludeLayers.value & (1 << collider.gameObject.layer)) != 0)
+                    {
+                        shouldExclude = true;
+                        exclusionReason = $"레이어 '{LayerMask.LayerToName(collider.gameObject.layer)}'";
+                        excludedByLayer++;
+                    }
+                }
+                
+                // 3. 시작점/도착점 근접성 기반 제외 검사
+                if (!shouldExclude && pipeEndpoints.Count > 0)
+                {
+                    Vector3 colliderPosition = collider.transform.position;
+                    
+                    foreach (var endpoint in pipeEndpoints)
+                    {
+                        float distance = Vector3.Distance(colliderPosition, endpoint);
+                        if (distance < endpointExclusionRadius)
+                        {
+                            shouldExclude = true;
+                            exclusionReason = $"시작점/도착점 근접 (거리: {distance:F2})";
+                            excludedByEndpoint++;
+                            break;
+                        }
+                    }
+                }
+                
+                if (shouldExclude)
+                {
+                    Debug.Log($"장애물 제외: {collider.name} - {exclusionReason}");
+                }
+                else
+                {
+                    // 장애물로 추가
+                    Bounds bounds = collider.bounds;
+                    
+                    // 바운딩 박스의 최소점과 최대점
+                    float[] min = new float[] { bounds.min.x, bounds.min.y, bounds.min.z };
+                    float[] max = new float[] { bounds.max.x, bounds.max.y, bounds.max.z };
+                    
+                    obstacles.Add(new float[][] { min, max });
+                    Debug.Log($"장애물 추가: {collider.name} (바운딩 박스: {bounds.min} ~ {bounds.max})");
+                }
             }
+            
+            Debug.Log($"장애물 필터링 완료: 총 {totalColliders}개 콜라이더 중 " +
+                     $"{obstacles.Count}개 장애물 추가, " +
+                     $"{excludedByTag}개 태그 제외, " +
+                     $"{excludedByLayer}개 레이어 제외, " +
+                     $"{excludedByEndpoint}개 엔드포인트 근접 제외");
             
             return obstacles;
         }

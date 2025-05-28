@@ -636,9 +636,9 @@ namespace Model
                 {
                     float currentCost = EdgeCost[edgeKey];
                     EdgeCost[edgeKey] = currentCost * weightMultiplier;
-                        }
-                        else
-                        {
+                }
+                else
+                {
                     // 엣지 비용이 없는 경우, 기본값에 가중치 적용
                     EdgeCost[edgeKey] = 1.0f * weightMultiplier;
                 }
@@ -1175,14 +1175,20 @@ namespace Model
                 else
                 {
                     // 아직 경로가 생성되지 않은 파이프인 경우 시작점과 도착점을 임시 장애물로 처리
-                    Vector3 startPoint = Pipes[i].Item1.Item1;
-                    Vector3 endPoint = Pipes[i].Item2.Item1;
+                    var criticalPoints = new List<Vector3>
+                    {
+                        Pipes[i].Item1.Item1, // 시작점
+                        Pipes[i].Item2.Item1  // 도착점
+                    };
                     
-                    // 시작점과 도착점 주변에 임시 장애물 영역 생성
-                    points.AddRange(CreateTemporaryObstaclePoints(startPoint, radius));
-                    points.AddRange(CreateTemporaryObstaclePoints(endPoint, radius));
+                    // 각 중요 지점(시작점, 도착점)에 대해 Y축 높이까지 장애물 생성
+                    foreach (var criticalPoint in criticalPoints)
+                    {
+                        // Y축 높이까지 전체 영역을 장애물로 생성
+                        points.AddRange(CreateVerticalObstacleColumn(criticalPoint, radius));
+                    }
                     
-                    Debug.Log($"임시 장애물 파이프 {i}: 시작점 {startPoint}, 도착점 {endPoint}, 임시 포인트 {points.Count}개, 반경 {radius}");
+                    Debug.Log($"임시 장애물 파이프 {i}: 중요 지점 {criticalPoints.Count}개, Y축 높이까지 장애물 생성, 총 임시 포인트 {points.Count}개, 반경 {radius}");
                 }
                 
                 // PipeInfo 객체 생성 및 추가
@@ -1193,7 +1199,70 @@ namespace Model
             return pipeInfoList;
         }
         
-        // 특정 점 주변에 임시 장애물 포인트들을 생성
+        // 특정 점에서 Y축 높이까지 전체 영역을 장애물로 생성
+        private List<Vector3> CreateVerticalObstacleColumn(Vector3 centerPoint, float radius)
+        {
+            var obstaclePoints = new List<Vector3>();
+            
+            // 파이프 반경의 2배 영역을 장애물로 설정
+            float obstacleRadius = radius * 1.05f;
+            int gridDensity = Mathf.Max(1, (int)obstacleRadius); // 최소 1, 반경에 비례한 밀도
+            
+            // 공간 좌표에서 Y축 범위 가져오기
+            float minY = SpaceCoords[0][1]; // 최소 Y 좌표
+            float maxY = SpaceCoords[1][1]; // 최대 Y 좌표
+            
+            Debug.Log($"Y축 장애물 생성: 중심점 {centerPoint}, Y 범위 {minY} ~ {maxY}, 반경 {obstacleRadius}");
+            
+            // Y축 전체 높이에 대해 장애물 생성
+            for (float y = minY; y <= maxY; y += 0.5f) // 0.5 간격으로 Y축 전체 커버
+            {
+                // 각 Y 레벨에서 X-Z 평면에 원형 장애물 영역 생성
+                for (int x = -gridDensity; x <= gridDensity; x++)
+                {
+                    for (int z = -gridDensity; z <= gridDensity; z++)
+                    {
+                        Vector3 offset = new Vector3(x, 0, z); // Y는 별도 처리
+                        float horizontalDistance = offset.magnitude;
+                        
+                        // 수평 거리가 장애물 반경 내에 있는 점들만 추가
+                        if (horizontalDistance <= obstacleRadius)
+                        {
+                            Vector3 obstaclePoint = new Vector3(
+                                centerPoint.x + x,
+                                y, // 현재 Y 레벨
+                                centerPoint.z + z
+                            );
+                            obstaclePoints.Add(obstaclePoint);
+                        }
+                    }
+                }
+                
+                // 추가로 주요 방향에 더 많은 포인트 생성 (각 Y 레벨에서)
+                foreach (var dir in Directions)
+                {
+                    // Y 방향은 이미 전체 높이를 커버하므로 X, Z 방향만 처리
+                    if (!dir.Item2.Contains("y"))
+                    {
+                        for (float dist = 0.5f; dist <= obstacleRadius; dist += 0.5f)
+                        {
+                            Vector3 directionOffset = new Vector3(dir.Item1.x, 0, dir.Item1.z) * dist;
+                            Vector3 directionPoint = new Vector3(
+                                centerPoint.x + directionOffset.x,
+                                y, // 현재 Y 레벨
+                                centerPoint.z + directionOffset.z
+                            );
+                            obstaclePoints.Add(directionPoint);
+                        }
+                    }
+                }
+            }
+            
+            Debug.Log($"Y축 장애물 컬럼 생성 완료: 중심점 {centerPoint}, Y 범위 {minY}~{maxY}, 수평 반경 {obstacleRadius}, 총 포인트 수 {obstaclePoints.Count}");
+            return obstaclePoints;
+        }
+        
+        // 특정 점 주변에 임시 장애물 포인트들을 생성 (기존 메서드 유지)
         private List<Vector3> CreateTemporaryObstaclePoints(Vector3 centerPoint, float radius)
         {
             var obstaclePoints = new List<Vector3>();
