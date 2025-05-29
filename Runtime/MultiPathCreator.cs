@@ -21,9 +21,9 @@ namespace InstantPipes
 
         // 장애물 필터링 옵션 추가
         [Header("장애물 필터링 옵션")]
-        public string[] excludeTags = new string[] { "PipeEndpoint", "StartPoint", "EndPoint" }; // 제외할 태그들
+        public string[] excludeTags = new string[] { }; // 제외할 태그들
         public LayerMask excludeLayers = 0; // 제외할 레이어들
-        public float endpointExclusionRadius = 2.0f; // 시작점/도착점 주변 제외 반경
+        public float endpointExclusionRadius = 1.0f; // 시작점/도착점 주변 제외 반경
 
         public bool LastPathSuccess = true;
 

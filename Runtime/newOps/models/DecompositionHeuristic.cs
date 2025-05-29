@@ -196,7 +196,7 @@ namespace Model
                     var startPoint = PathN[i][0].Item1;
                     var endPoint = PathN[i][PathN[i].Count - 1].Item1;
                     
-                    int gridSize = 1;
+                    int gridSize = 3;
                     
                     // 그리드 셀 계산
                     int startX = (int)(startPoint.x / gridSize);
