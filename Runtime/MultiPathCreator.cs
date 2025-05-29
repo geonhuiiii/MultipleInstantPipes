@@ -21,7 +21,7 @@ namespace InstantPipes
 
         // 장애물 필터링 옵션 추가
         [Header("장애물 필터링 옵션")]
-        public string[] excludeTags = new string[] { }; // 제외할 태그들
+        public string[] excludeTags = null; // 제외할 태그들
         public LayerMask excludeLayers = 0; // 제외할 레이어들
         public float endpointExclusionRadius = 1.0f; // 시작점/도착점 주변 제외 반경
 
@@ -213,20 +213,6 @@ namespace InstantPipes
                 bool shouldExclude = false;
                 string exclusionReason = "";
                 
-                // 1. 태그 기반 제외 검사
-                if (excludeTags != null && excludeTags.Length > 0)
-                {
-                    foreach (string excludeTag in excludeTags)
-                    {
-                        if (!string.IsNullOrEmpty(excludeTag) && collider.CompareTag(excludeTag))
-                        {
-                            shouldExclude = true;
-                            exclusionReason = $"태그 '{excludeTag}'";
-                            excludedByTag++;
-                            break;
-                        }
-                    }
-                }
                 
                 // 2. 레이어 기반 제외 검사
                 if (!shouldExclude && excludeLayers != 0)
