@@ -168,13 +168,13 @@ namespace Model
                 // 공간 크기에 따라 동적으로 stepSize 조정
                 float stepSize;
                 if (maxDimension <= 20f)
-                    stepSize = 1.0f;
-                else if (maxDimension <= 50f)
                     stepSize = 2.0f;
+                else if (maxDimension <= 50f)
+                    stepSize = 4.0f;
                 else if (maxDimension <= 100f)
-                    stepSize = 3.0f;
+                    stepSize = 8.0f;
                 else
-                    stepSize = Mathf.Max(3.0f, maxDimension / 30f); // 최대 약 30x30x30 격자
+                    stepSize = Mathf.Max(16.0f, maxDimension / 10f); // 최대 약 30x30x30 격자
                 
                 // 예상 점 수 계산
                 int expectedPointsX = Mathf.CeilToInt(spaceSize.x / stepSize) + 1;
@@ -183,7 +183,7 @@ namespace Model
                 long expectedTotalPoints = (long)expectedPointsX * expectedPointsY * expectedPointsZ;
                 
                 // 안전장치: 최대 100,000개 점으로 제한
-                const long maxAllowedPoints = 100000;
+                const long maxAllowedPoints = 1000000;
                 if (expectedTotalPoints > maxAllowedPoints)
                 {
                     // stepSize를 더 크게 조정
@@ -677,12 +677,12 @@ namespace Model
             OpenSet[startKey] = 0.0f;
             priorityQueue.Add((0, Start));
             
-            int maxIterations = 50000;
+            int maxit = 5000000;
             int currentIteration = 0;
             float bestCost = float.MaxValue;
             Node bestNode = null;
             
-            while (priorityQueue.Count > 0 && currentIteration < maxIterations)
+            while (priorityQueue.Count > 0 && currentIteration < maxit)
             {
                 currentIteration++;
                 
