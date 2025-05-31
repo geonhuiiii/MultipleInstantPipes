@@ -144,14 +144,6 @@ namespace InstantPipes
                 {
                     // 경로를 찾지 못한 경우 간단한 직선 경로 추가
                     Debug.LogWarning($"파이프 {i}의 경로를 찾지 못했습니다. 간단한 직선 경로를 생성합니다.");
-                    var simplePath = new List<Vector3>
-                    {
-                        config.startPosition,
-                        config.startPosition + config.startNormal.normalized * Height,
-                        config.endPosition + config.endNormal.normalized * Height,
-                        config.endPosition
-                    };
-                    allPaths.Add(simplePath);
                 }
             }
             }
