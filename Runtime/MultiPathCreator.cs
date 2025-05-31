@@ -16,14 +16,14 @@ namespace InstantPipes
         public float Chaos = 0;
         public float StraightPathPriority = 10;
         public float NearObstaclesPriority = 0;
-        public int MaxIterations = 10000;
-        public int MinDistanceBetweenBends = 3;
+        public int MaxIterations = 100000;
+        public int MinDistanceBetweenBends = 1;
 
         // 장애물 필터링 옵션 추가
         [Header("장애물 필터링 옵션")]
-        public string[] excludeTags = null; // 제외할 태그들
+        public string[] excludeTags = new string[] { "floor" }; // 제외할 태그들
         public LayerMask excludeLayers = 0; // 제외할 레이어들
-        public float endpointExclusionRadius = 1.0f; // 시작점/도착점 주변 제외 반경
+        public float endpointExclusionRadius = 0.5f; // 시작점/도착점 주변 제외 반경
 
         public bool LastPathSuccess = true;
 
@@ -117,10 +117,10 @@ namespace InstantPipes
             for (int i = 0; i < pipeConfigs.Count; i++)
             {
                 var config = pipeConfigs[i];
-                var pathPoints = pathsN[i];
                 
-                if (pathPoints != null && pathPoints.Count > 0)
+                if (pathsN != null && i < pathsN.Count && pathsN[i] != null && pathsN[i].Count > 0)
                 {
+                    var pathPoints = pathsN[i];
                     var path = new List<Vector3>();
                     
                     // 시작점 추가
@@ -130,7 +130,7 @@ namespace InstantPipes
                     // 중간 경로 포인트 추가
                     foreach (var point in pathPoints)
                     {
-                        path.Add(new Vector3(point.Item1[0], point.Item1[1], point.Item1[2]));
+                        path.Add(point.Item1); // point.Item1은 이미 Vector3
                     }
                     
                     // 끝점 추가
@@ -188,7 +188,7 @@ namespace InstantPipes
                   float radius)> pipeConfigs = null)
         {
             List<float[][]> obstacles = new List<float[][]>();
-            Collider[] colliders = Object.FindObjectsOfType<Collider>();
+            Collider[] colliders = Object.FindObjectsByType<Collider>(FindObjectsSortMode.None);
             
             // 시작점과 도착점 위치 수집 (제외할 오브젝트 판단용)
             HashSet<Vector3> pipeEndpoints = new HashSet<Vector3>();
@@ -225,23 +225,6 @@ namespace InstantPipes
                     }
                 }
                 
-                // 3. 시작점/도착점 근접성 기반 제외 검사
-                if (!shouldExclude && pipeEndpoints.Count > 0)
-                {
-                    Vector3 colliderPosition = collider.transform.position;
-                    
-                    foreach (var endpoint in pipeEndpoints)
-                    {
-                        float distance = Vector3.Distance(colliderPosition, endpoint);
-                        if (distance < endpointExclusionRadius)
-                        {
-                            shouldExclude = true;
-                            exclusionReason = $"시작점/도착점 근접 (거리: {distance:F2})";
-                            excludedByEndpoint++;
-                            break;
-                        }
-                    }
-                }
                 
                 if (shouldExclude)
                 {
@@ -251,10 +234,10 @@ namespace InstantPipes
                 {
                     // 장애물로 추가
                     Bounds bounds = collider.bounds;
-                    
+                    float padding = 0.5f;
                     // 바운딩 박스의 최소점과 최대점
-                    float[] min = new float[] { bounds.min.x, bounds.min.y, bounds.min.z };
-                    float[] max = new float[] { bounds.max.x, bounds.max.y, bounds.max.z };
+                    float[] min = new float[] { bounds.min.x - padding, bounds.min.y - padding, bounds.min.z - padding };
+                    float[] max = new float[] { bounds.max.x + padding, bounds.max.y + padding, bounds.max.z + padding };
                     
                     obstacles.Add(new float[][] { min, max });
                     Debug.Log($"장애물 추가: {collider.name} (바운딩 박스: {bounds.min} ~ {bounds.max})");
