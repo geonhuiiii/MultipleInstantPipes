@@ -21,12 +21,13 @@ namespace Model
 
         public DecompositionHeuristic(
             int maxit,
+            float gridSize,
             float[][] spaceCoords,
             List<float[][]> obstacleCoords,
             List<( (float[], string), (float[], string), float, float )> pipes,
             float wPath, float wBend, float wEnergy, int minDisBend,
             List<string> indexCategory = null
-        ) : base(maxit, spaceCoords, obstacleCoords, wPath, wBend, wEnergy, minDisBend)
+        ) : base(maxit, gridSize, spaceCoords, obstacleCoords, wPath, wBend, wEnergy, minDisBend)
         {
             this.NPipes = pipes.Count;
             

@@ -8,6 +8,7 @@ namespace Model
 {
     public class AStar
     {
+        public float GridSize = 1;
         public float[][] SpaceCoords;
         public List<float[][]> ObstacleCoords;
         public int Dim = 3;
@@ -97,8 +98,9 @@ namespace Model
             return res;
         }
 
-        public AStar(int _maxit, float[][] spaceCoords, List<float[][]> obstacleCoords, float wPath, float wBend, float wEnergy, int minDisBend, bool useDiagonals = false)
+        public AStar(int _maxit, float _gridSize, float[][] spaceCoords, List<float[][]> obstacleCoords, float wPath, float wBend, float wEnergy, int minDisBend, bool useDiagonals = false)
         {
+            GridSize = _gridSize;
             maxit = _maxit;
             SpaceCoords = spaceCoords;
             ObstacleCoords = obstacleCoords ?? new List<float[][]>();
@@ -119,8 +121,8 @@ namespace Model
         }
         
         // 기존 생성자는 그대로 유지하고 호환성을 위해 UseDiagonals를 true로 설정
-        public AStar(int _maxit, float[][] spaceCoords, List<float[][]> obstacleCoords, float wPath, float wBend, float wEnergy, int minDisBend)
-            : this(_maxit, spaceCoords, obstacleCoords, wPath, wBend, wEnergy, minDisBend, true)
+        public AStar(int _maxit, float _gridSize, float[][] spaceCoords, List<float[][]> obstacleCoords, float wPath, float wBend, float wEnergy, int minDisBend)
+            : this(_maxit, _gridSize, spaceCoords, obstacleCoords, wPath, wBend, wEnergy, minDisBend, true)
         {
         }
         
@@ -166,15 +168,7 @@ namespace Model
                 float maxDimension = Mathf.Max(spaceSize.x, spaceSize.y, spaceSize.z);
                 
                 // 공간 크기에 따라 동적으로 stepSize 조정
-                float stepSize;
-                if (maxDimension <= 20f)
-                    stepSize = 2.0f;
-                else if (maxDimension <= 50f)
-                    stepSize = 4.0f;
-                else if (maxDimension <= 100f)
-                    stepSize = 8.0f;
-                else
-                    stepSize = Mathf.Max(16.0f, maxDimension / 10f); // 최대 약 30x30x30 격자
+                float stepSize = GridSize;
                 
                 // 예상 점 수 계산
                 int expectedPointsX = Mathf.CeilToInt(spaceSize.x / stepSize) + 1;
@@ -525,13 +519,6 @@ namespace Model
                 
                 p_cost *= (10.0f * directionPenalty);
                 Debug.Log($"공간 부족으로 인한 비용 증가: {p_cost}");
-            }
-            
-            // 목표 지점에 가까워질수록 비용 감소
-            float distanceToGoal = Vector3.Distance(curr_p.Coord, end_info);
-            if (distanceToGoal < 5f)
-            {
-                p_cost *= 0.8f;
             }
             
             string coordKey = $"{curr_p_coord.x},{curr_p_coord.y},{curr_p_coord.z}";

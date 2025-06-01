@@ -12,7 +12,7 @@ namespace InstantPipes
     {
         public float Height = 1;
         public float GridRotationY = 0;
-        public float GridSize = 3;
+        public float GridSize = 1.0f;
         public float Chaos = 0;
         public float StraightPathPriority = 10;
         public float NearObstaclesPriority = 0;
@@ -97,6 +97,7 @@ namespace InstantPipes
                 UnityEngine.Debug.Log("DecompositionHeuristic 인스턴스 생성 시작");
                 var decomposition = new DecompositionHeuristic(
                     MaxIterations,
+                    GridSize,
                     spaceCoords,
                     obstacleCoords,
                     pipes,
