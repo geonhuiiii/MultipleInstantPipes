@@ -1160,8 +1160,8 @@ namespace InstantPipes
             // 파이프 생성 실행 (메인 스레드에서만 가능)
             bool success = false;
             int newPipesCount = 0;
-            List<float> Chaoses = new List<float> { 10f };
-            List<int> miters = new List<int> { 5 };
+            List<float> Chaoses = new List<float> { 5f };
+            List<int> miters = new List<int> { 10 };
             foreach (var miter in miters)
             {
                 foreach (var chaos in Chaoses)

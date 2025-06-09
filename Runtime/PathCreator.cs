@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Net;
 using UnityEngine;
 
 namespace InstantPipes
@@ -14,20 +15,21 @@ namespace InstantPipes
         public float StraightPathPriority = 10;
         public float NearObstaclesPriority = 0;
         public int MaxIterations = 1000;
+        public bool hasCollision = false;
 
         public bool LastPathSuccess = true;
 
-        public List<Vector3> Create(Vector3 startPosition, Vector3 startNormal, Vector3 endPosition, Vector3 endNormal, float radius = 1.0f)
+        public List<Vector3> Create(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float pipeRadius)
         {
-            Radius = radius;
+            Radius = pipeRadius;
             var path = new List<Vector3>();
-            var pathStart = startPosition + startNormal.normalized * Height;
-            var pathEnd = endPosition + endNormal.normalized * Height;
+            var pathStart = startPoint + startNormal.normalized * Height;
+            var pathEnd = endPoint + endNormal.normalized * Height;
             var baseDirection = (pathEnd - pathStart).normalized;
 
             var pathPoints = FindPath(new Point(pathStart), new Point(pathEnd), startNormal.normalized);
 
-            path.Add(startPosition);
+            path.Add(startPoint);
             path.Add(pathStart);
 
             LastPathSuccess = true;
@@ -35,6 +37,9 @@ namespace InstantPipes
             if (pathPoints != null)
             {
                 pathPoints.ForEach(pathPoint => path.Add(pathPoint.Position));
+                
+                foreach(var pp in pathPoints)
+                    hasCollision = pp.hasCollision(GridSize, Radius, Quaternion.AngleAxis(GridRotationY, Vector3.up));
             }
             else
             {
@@ -42,6 +47,7 @@ namespace InstantPipes
             }
 
             path.Add(pathEnd);
+            path.Add(endPoint);
 
             return path;
         }
@@ -292,20 +298,28 @@ namespace InstantPipes
                     }
                 }
 
-                Collider[] colliders = Physics.OverlapSphere(Position, 10f);
-                foreach (var collider in colliders)
-                {
-                    if (collider.isTrigger)
-                        continue;
-                        
-                    Vector3 closestPoint = collider.ClosestPoint(Position);
-                    float distance = Vector3.Distance(Position, closestPoint);
-                    minDistance = Mathf.Min(minDistance, distance);
-                }
 
                 return minDistance;
             }
+            public bool hasCollision(float gridSize, float radius, Quaternion rotation)
+            {
+                var list = new List<Vector3>();
 
+                //Debug.Log($"Getting neighbors with gridSize: {gridSize}, radius: {radius}");
+
+                Vector3[] extendedDirections = new Vector3[_directions.Length];
+                System.Array.Copy(_directions, extendedDirections, _directions.Length);
+
+                foreach (var direction in extendedDirections)
+                {
+                    if (Physics.SphereCast(Position, radius * 1.2f, rotatedDirection, out RaycastHit hit, gridSize + radius))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
             public List<Vector3> GetNeighbors(float gridSize, float radius, Quaternion rotation)
             {
                 var list = new List<Vector3>();
@@ -326,6 +340,7 @@ namespace InstantPipes
                     else
                     {
                         //Debug.Log($"Obstacle detected at distance: {hit.distance} in direction: {rotatedDirection}");
+
                     }
                 }
 

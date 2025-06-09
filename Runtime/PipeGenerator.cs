@@ -643,7 +643,6 @@ namespace InstantPipes
 
         private GameObject CreateObstacleCollider(Vector3 position, Vector3 direction)
         {
-            // 이전에는 Radius * 3으로 설정했으나, 파이프 충돌을 더 잘 감지하기 위해 크기 증가
             float obstacleRadius = Radius * 5f; // 파이프 반지름의 5배로 콜라이더 크기 증가
             
             var tempCollider = new GameObject("PipeObstacleCollider");
@@ -790,11 +789,16 @@ namespace InstantPipes
             var configs = pipeConfigs.Select(config => 
                 (config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius)
             ).ToList();
-            
+            bool isCollision = false;
             var shortestPathValue = 0f;
             foreach (var config in configs){
                 AddPipe(config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius);
             }
+            if (MultiPathCreator.hasCollision)
+            {
+                isCollision = true;
+            }
+            
             var shortestPaths = configs;
             for (int j = 0; j < Pipes.Count; j++)
             {
@@ -817,9 +821,11 @@ namespace InstantPipes
                         // 모든 경로를 한 번에 계산
                         allPathCalc += CalculatePathLength(path);
                     }
-                    if(allPathCalc < shortestPathValue){
+                    if(allPathCalc < shortestPathValue && !MultiPathCreator.hasCollision)
+                    {
                         shortestPathValue = allPathCalc;
                         shortestPaths = configs;
+                        isCollision = false;
                     }
                 }
 
@@ -832,11 +838,13 @@ namespace InstantPipes
                 AddPipe(config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius);
             }
             Debug.Log($"총 거리는 {shortestPathValue} 입니다.");
+            if (isCollision) 
+                Debug.Log($"총 경로 중 충돌발생!.");
             //Debug.Log($"다중 경로 계산 완료: {shortestPaths.Count}개 경로 생성됨");
 
-                // 임시 콜라이더 정리
-                //Debug.Log($"임시 충돌체 {temporaryColliders.Count}개 정리 중...");
-                foreach (var collider in temporaryColliders)
+            // 임시 콜라이더 정리
+            //Debug.Log($"임시 충돌체 {temporaryColliders.Count}개 정리 중...");
+            foreach (var collider in temporaryColliders)
                 {
                     if (collider != null) UnityEngine.Object.DestroyImmediate(collider);
                 }
