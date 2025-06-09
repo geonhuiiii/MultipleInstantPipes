@@ -145,10 +145,6 @@ namespace InstantPipes
                 next = Points[x] - (Points[x] - Points[x + 1]).normalized * _generator.Curvature;
             else
                 next = (Points[x] + Points[x + 1]) / 2 + (Points[x] - Points[x + 1]).normalized * _ringThickness / 2;
-<<<<<<< HEAD
-=======
-            Debug.Log($"prev: {prev}, next: {next}");
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
             
             if (x == 1)
             {
@@ -389,19 +385,11 @@ namespace InstantPipes
             if (filteredPoints.Count >= 3)
             {
                 Points = filteredPoints;
-<<<<<<< HEAD
                 //Debug.Log($"Points filtered: {Points.Count} points remaining after filtering");
             }
             else
             {
                 //Debug.LogWarning("Not enough points after filtering, keeping original points");
-=======
-                Debug.Log($"Points filtered: {Points.Count} points remaining after filtering");
-            }
-            else
-            {
-                Debug.LogWarning("Not enough points after filtering, keeping original points");
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
             }
         }
 

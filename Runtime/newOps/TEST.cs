@@ -419,11 +419,7 @@ namespace InstantPipes
                     stopwatch.Start();
                     
                     // 경로 생성
-<<<<<<< HEAD
                     var path = pathCreator.Create(startPoint, Vector3.up, endPoint, Vector3.up, 1);
-=======
-                    var path = pathCreator.Create(startPoint, Vector3.up, endPoint, Vector3.up);
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
                     
                     stopwatch.Stop();
                     totalTime += stopwatch.ElapsedMilliseconds;

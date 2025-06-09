@@ -6,10 +6,6 @@ namespace InstantPipes
     [System.Serializable]
     public class PathCreator
     {
-<<<<<<< HEAD
-        
-=======
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
         public float Height = 5;
         public float GridRotationY = 0;
         public float Radius = 1;
@@ -21,29 +17,17 @@ namespace InstantPipes
 
         public bool LastPathSuccess = true;
 
-<<<<<<< HEAD
-        public List<Vector3> Create(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float pipeRadius )
+        public List<Vector3> Create(Vector3 startPosition, Vector3 startNormal, Vector3 endPosition, Vector3 endNormal, float radius = 1.0f)
         {
-            Radius = pipeRadius;
-            var path = new List<Vector3>();
-            var pathStart = startPoint + startNormal.normalized * Height;
-            var pathEnd = endPoint + endNormal.normalized * Height;
-=======
-        public List<Vector3> Create(Vector3 startPosition, Vector3 startNormal, Vector3 endPosition, Vector3 endNormal)
-        {
+            Radius = radius;
             var path = new List<Vector3>();
             var pathStart = startPosition + startNormal.normalized * Height;
             var pathEnd = endPosition + endNormal.normalized * Height;
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
             var baseDirection = (pathEnd - pathStart).normalized;
 
             var pathPoints = FindPath(new Point(pathStart), new Point(pathEnd), startNormal.normalized);
 
-<<<<<<< HEAD
-            path.Add(startPoint);
-=======
             path.Add(startPosition);
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
             path.Add(pathStart);
 
             LastPathSuccess = true;
@@ -58,8 +42,6 @@ namespace InstantPipes
             }
 
             path.Add(pathEnd);
-<<<<<<< HEAD
-            path.Add(endPoint);
 
             return path;
         }
@@ -112,12 +94,6 @@ namespace InstantPipes
             
             return allPaths;
         }
-=======
-            path.Add(endPosition);
-
-            return path;
-        }
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
 
         private List<Point> FindPath(Point start, Point target, Vector3 startNormal)
         {
@@ -129,11 +105,7 @@ namespace InstantPipes
 
             Dictionary<Vector3, Point> pointDictionary = new Dictionary<Vector3, Point>();
 
-<<<<<<< HEAD
             //Debug.Log($"Starting path finding from {start.Position} to {target.Position} with radius: {Radius}");
-=======
-            Debug.Log($"Starting path finding from {start.Position} to {target.Position} with radius: {Radius}");
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
 
             int iterations = 0;
             while (toSearch.Count > 0 && iterations < MaxIterations)
@@ -164,11 +136,7 @@ namespace InstantPipes
                     
                     SmoothPath(path, visited);
                     
-<<<<<<< HEAD
                     //Debug.Log($"Path found! Points: {path.Count}");
-=======
-                    Debug.Log($"Path found! Points: {path.Count}");
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
                     return path;
                 }
 
@@ -202,20 +170,12 @@ namespace InstantPipes
                         if (distanceToObstacle < Radius * 2.0f)
                         {
                             costToNeighbor += 50000;
-<<<<<<< HEAD
                             //Debug.Log($"Very close to obstacle: {distanceToObstacle} < {Radius * 2.0f}, adding 50000 to cost");
-=======
-                            Debug.Log($"Very close to obstacle: {distanceToObstacle} < {Radius * 2.0f}, adding 50000 to cost");
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
                         }
                         else if (distanceToObstacle < Radius * 4.0f)
                         {
                             costToNeighbor += NearObstaclesPriority * 20 * priorityFactor;
-<<<<<<< HEAD
                             //Debug.Log($"Close to obstacle: {distanceToObstacle} < {Radius * 4.0f}, adding {NearObstaclesPriority * 20 * priorityFactor} to cost");
-=======
-                            Debug.Log($"Close to obstacle: {distanceToObstacle} < {Radius * 4.0f}, adding {NearObstaclesPriority * 20 * priorityFactor} to cost");
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
                         }
                         else
                         {
@@ -237,11 +197,7 @@ namespace InstantPipes
                 }
             }
 
-<<<<<<< HEAD
             //Debug.Log($"Path not found after {iterations} iterations.");
-=======
-            Debug.Log($"Path not found after {iterations} iterations.");
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
             return null;
         }
 
@@ -309,39 +265,7 @@ namespace InstantPipes
 
             private readonly Vector3[] _directions = { 
                 Vector3.up, Vector3.down, Vector3.left, Vector3.right, 
-<<<<<<< HEAD
-                Vector3.forward, Vector3.back/*, 
-                
-=======
-                Vector3.forward, Vector3.back, 
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
-                // 수평 대각선
-                (Vector3.forward + Vector3.right).normalized,
-                (Vector3.forward + Vector3.left).normalized,
-                (Vector3.back + Vector3.right).normalized,
-                (Vector3.back + Vector3.left).normalized,
-                // 수직 대각선 추가
-                (Vector3.up + Vector3.forward).normalized,
-                (Vector3.up + Vector3.back).normalized,
-                (Vector3.up + Vector3.left).normalized,
-                (Vector3.up + Vector3.right).normalized,
-                (Vector3.down + Vector3.forward).normalized,
-                (Vector3.down + Vector3.back).normalized,
-                (Vector3.down + Vector3.left).normalized,
-                (Vector3.down + Vector3.right).normalized,
-                // 3방향 대각선 추가
-                (Vector3.up + Vector3.forward + Vector3.right).normalized,
-                (Vector3.up + Vector3.forward + Vector3.left).normalized,
-                (Vector3.up + Vector3.back + Vector3.right).normalized,
-                (Vector3.up + Vector3.back + Vector3.left).normalized,
-                (Vector3.down + Vector3.forward + Vector3.right).normalized,
-                (Vector3.down + Vector3.forward + Vector3.left).normalized,
-                (Vector3.down + Vector3.back + Vector3.right).normalized,
-                (Vector3.down + Vector3.back + Vector3.left).normalized
-<<<<<<< HEAD
-                */
-=======
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
+                Vector3.forward, Vector3.back
             };
 
             public Point(Vector3 position)
@@ -368,8 +292,6 @@ namespace InstantPipes
                     }
                 }
 
-<<<<<<< HEAD
-=======
                 Collider[] colliders = Physics.OverlapSphere(Position, 10f);
                 foreach (var collider in colliders)
                 {
@@ -381,7 +303,6 @@ namespace InstantPipes
                     minDistance = Mathf.Min(minDistance, distance);
                 }
 
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
                 return minDistance;
             }
 
@@ -389,11 +310,7 @@ namespace InstantPipes
             {
                 var list = new List<Vector3>();
                 
-<<<<<<< HEAD
                 //Debug.Log($"Getting neighbors with gridSize: {gridSize}, radius: {radius}");
-=======
-                Debug.Log($"Getting neighbors with gridSize: {gridSize}, radius: {radius}");
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
 
                 Vector3[] extendedDirections = new Vector3[_directions.Length];
                 System.Array.Copy(_directions, extendedDirections, _directions.Length);
@@ -408,11 +325,7 @@ namespace InstantPipes
                     }
                     else
                     {
-<<<<<<< HEAD
                         //Debug.Log($"Obstacle detected at distance: {hit.distance} in direction: {rotatedDirection}");
-=======
-                        Debug.Log($"Obstacle detected at distance: {hit.distance} in direction: {rotatedDirection}");
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
                     }
                 }
 

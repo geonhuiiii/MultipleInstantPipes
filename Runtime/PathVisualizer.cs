@@ -93,11 +93,7 @@ namespace InstantPipes
                     // MultiPathCreator에서 임시 계산 수행
                     pipeGenerator.MultiPathCreator.Height = pipeGenerator.Height;
                     pipeGenerator.MultiPathCreator.GridSize = pipeGenerator.GridSize;
-<<<<<<< HEAD
                     //pipeGenerator.MultiPathCreator.CreateMultiplePaths(tempConfigs);
-=======
-                    pipeGenerator.MultiPathCreator.CreateMultiplePaths(tempConfigs);
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
                 }
                 
                 // 현재 상태 저장

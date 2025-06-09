@@ -55,11 +55,7 @@ namespace InstantPipes
             }
             
             // 바운딩 박스 주변에 여유 공간 추가
-<<<<<<< HEAD
             float padding = 0.5f;
-=======
-            float padding = 10f;
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
             minX -= padding; minY -= padding; minZ -= padding;
             maxX += padding; maxY += padding; maxZ += padding;
             
@@ -249,7 +245,6 @@ namespace InstantPipes
             
             return obstacles;
         }
-<<<<<<< HEAD
             public float CalculatePathLength(List<Vector3> points)
         {
             float length = 0f;
@@ -261,7 +256,5 @@ namespace InstantPipes
 
             return length;
         }
-=======
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
     }
 } 

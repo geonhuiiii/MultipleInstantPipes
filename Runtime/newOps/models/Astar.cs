@@ -157,107 +157,37 @@ namespace Model
         public void InitProperty()
         {
             PhyVertex = new List<Vector3>();
-            
+
             if (SpaceCoords != null && SpaceCoords.Length == 2)
             {
                 Vector3 min = FloatArrayToVector3(SpaceCoords[0]);
                 Vector3 max = FloatArrayToVector3(SpaceCoords[1]);
-<<<<<<< HEAD
-                max.z += 10.0f;
-=======
-                
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
                 // 공간 크기 계산
                 Vector3 spaceSize = max - min;
                 float maxDimension = Mathf.Max(spaceSize.x, spaceSize.y, spaceSize.z);
-                
+
                 // 공간 크기에 따라 동적으로 stepSize 조정
                 float stepSize = GridSize;
-                
+
                 // 예상 점 수 계산
                 int expectedPointsX = Mathf.CeilToInt(spaceSize.x / stepSize) + 1;
                 int expectedPointsY = Mathf.CeilToInt(spaceSize.y / stepSize) + 1;
                 int expectedPointsZ = Mathf.CeilToInt(spaceSize.z / stepSize) + 1;
                 long expectedTotalPoints = (long)expectedPointsX * expectedPointsY * expectedPointsZ;
-                
-<<<<<<< HEAD
-=======
-                // 안전장치: 최대 100,000개 점으로 제한
-                const long maxAllowedPoints = 1000000;
-                if (expectedTotalPoints > maxAllowedPoints)
-                {
-                    // stepSize를 더 크게 조정
-                    float scaleFactor = Mathf.Pow((float)expectedTotalPoints / maxAllowedPoints, 1f/3f);
-                    stepSize *= scaleFactor;
-                    
-                    expectedPointsX = Mathf.CeilToInt(spaceSize.x / stepSize) + 1;
-                    expectedPointsY = Mathf.CeilToInt(spaceSize.y / stepSize) + 1;
-                    expectedPointsZ = Mathf.CeilToInt(spaceSize.z / stepSize) + 1;
-                    expectedTotalPoints = (long)expectedPointsX * expectedPointsY * expectedPointsZ;
-                }
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
-                
+
+
                 Debug.Log($"공간 크기: {spaceSize}, stepSize: {stepSize:F2}, 예상 점 수: {expectedTotalPoints}");
-                
-                // 메모리 예약 (성능 최적화)
-<<<<<<< HEAD
-                int capacityEstimate = (int)expectedTotalPoints;
-=======
-                int capacityEstimate = Mathf.Min((int)expectedTotalPoints, (int)maxAllowedPoints);
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
-                PhyVertex.Capacity = capacityEstimate;
-                
+
+
                 int actualPointCount = 0;
-                
+
                 // X, Y, Z 축 방향으로 격자점 생성
-<<<<<<< HEAD
-                for (float x = min.x; x <= max.x ; x += stepSize)
-                {
-                    for (float y = min.y; y <= max.y ; y += stepSize)
-                    {
-                        for (float z = min.z; z <= max.z; z += stepSize)
-=======
-                for (float x = min.x; x <= max.x && actualPointCount < maxAllowedPoints; x += stepSize)
-                {
-                    for (float y = min.y; y <= max.y && actualPointCount < maxAllowedPoints; y += stepSize)
-                    {
-                        for (float z = min.z; z <= max.z && actualPointCount < maxAllowedPoints; z += stepSize)
->>>>>>> 3bda48018ec743a20e40231ff9df48323e012642
-                        {
-                            Vector3 point = new Vector3(x, y, z);
-                            
-                            // 장애물과 겹치지 않는지 확인
-                            bool isValid = true;
-                            if (ObstacleCoords != null)
-                            {
-                                foreach (var obs in ObstacleCoords)
-                                {
-                                        if (obs == null || obs.Length < 2) continue;
-                                    
-                                        float[] pointArray = Vector3ToFloatArray(point);
-                                        // CoordValid가 false를 반환하면 장애물 내부에 있음
-                                        if (!CoordValid(pointArray, obs[0], obs[1]))
-                                            {
-                                                isValid = false;
-                                                Debug.Log($"장애물 내부에 있음: {pointArray[0]}, {pointArray[1]}, {pointArray[2]}");
-                                                break;
-                                            }
-                                    }
-                            }
-                                        
-                            if (isValid)
-                            {
-                                PhyVertex.Add(point);
-                                actualPointCount++;
-                            }
-                        }
-                    }
+                
+
                 }
-            }
-            
-            Debug.Log($"PhyVertex 생성 완료: {PhyVertex.Count}개의 점");
             
         }
+
 
         public void reinit(){
             foreach (var key in OpenSet.Keys.ToList()) OpenSet[key] = 0f;
