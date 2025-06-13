@@ -37,10 +37,13 @@ namespace InstantPipes
             if (pathPoints != null)
             {
                 pathPoints.ForEach(pathPoint => path.Add(pathPoint.Position));
-                
-                foreach(var pp in pathPoints)
-                    hasCollision = pp.hasCollision(GridSize, Radius, Quaternion.AngleAxis(GridRotationY, Vector3.up));
-            }
+                foreach(var pp in pathPoints){
+                    if(hasCollision == false)
+                        hasCollision = pp.GetCollision(Radius, Quaternion.AngleAxis(GridRotationY, Vector3.up));
+                    if(hasCollision)
+                        break;
+                    }
+                }
             else
             {
                 LastPathSuccess = false;
@@ -56,33 +59,9 @@ namespace InstantPipes
                   Vector3 endPosition, Vector3 endNormal, 
                   float radius)> pipeConfigs)
         {
+            hasCollision = false;
             // 모든 경로에 대한 결과를 저장할 리스트
             List<List<Vector3>> allPaths = new List<List<Vector3>>();
-            
-            //Debug.Log($"다중 경로 생성 시작: {pipeConfigs.Count}개의 파이프 경로 계산");
-            
-            // 공간 바운딩 박스 계산
-            float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue;
-            float maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
-            
-            foreach (var config in pipeConfigs)
-            {
-                // 시작점과 끝점을 고려하여 바운딩 박스 계산
-                minX = Mathf.Min(minX, config.startPosition.x, config.endPosition.x);
-                minY = Mathf.Min(minY, config.startPosition.y, config.endPosition.y);
-                minZ = Mathf.Min(minZ, config.startPosition.z, config.endPosition.z);
-                
-                maxX = Mathf.Max(maxX, config.startPosition.x, config.endPosition.x);
-                maxY = Mathf.Max(maxY, config.startPosition.y, config.endPosition.y);
-                maxZ = Mathf.Max(maxZ, config.startPosition.z, config.endPosition.z);
-            }
-            
-            // 바운딩 박스 주변에 여유 공간 추가
-            float padding = 0.5f;
-            minX -= padding; minY -= padding; minZ -= padding;
-            maxX += padding; maxY += padding; maxZ += padding;
-            
-            //Debug.Log($"바운딩 박스 계산 완료: Min({minX}, {minY}, {minZ}), Max({maxX}, {Height+maxY}, {maxZ})");
             
             
             // pipe config 형식 변환
@@ -93,7 +72,6 @@ namespace InstantPipes
                 var path = Create(config.startPosition, config.startNormal.normalized * Height, config.endPosition, config.endNormal.normalized * Height, config.radius);
                 allPaths.Add(path);
             }
-            
             
             LastPathSuccess = allPaths.Count == pipeConfigs.Count;
             //Debug.Log($"다중 경로 생성 완료: {(LastPathSuccess ? "모든 경로 성공" : "일부 경로 실패")}");
@@ -107,7 +85,7 @@ namespace InstantPipes
             var processed = new List<Point>();
             var visited = new List<Vector3>();
             var priorityFactor = start.GetDistanceTo(target) / 100;
-            Random.InitState((int)(Chaos * 100));
+            Random.seed = (int)(Time.time * 1000);
 
             Dictionary<Vector3, Point> pointDictionary = new Dictionary<Vector3, Point>();
 
@@ -301,25 +279,19 @@ namespace InstantPipes
 
                 return minDistance;
             }
-            public bool hasCollision(float gridSize, float radius, Quaternion rotation)
+            
+            public bool GetCollision(float radius, Quaternion rotation)
             {
-                var list = new List<Vector3>();
-
-                //Debug.Log($"Getting neighbors with gridSize: {gridSize}, radius: {radius}");
-
-                Vector3[] extendedDirections = new Vector3[_directions.Length];
-                System.Array.Copy(_directions, extendedDirections, _directions.Length);
-
-                foreach (var direction in extendedDirections)
+                RaycastHit hit;
+                var a = Physics.SphereCast(Position, radius, Vector3.up, out hit , 0f);
+                if (a)
                 {
-                    if (Physics.SphereCast(Position, radius * 1.2f, rotatedDirection, out RaycastHit hit, gridSize + radius))
-                    {
-                        return true;
-                    }
+                    return true;
                 }
-
+                
                 return false;
             }
+
             public List<Vector3> GetNeighbors(float gridSize, float radius, Quaternion rotation)
             {
                 var list = new List<Vector3>();
@@ -333,7 +305,7 @@ namespace InstantPipes
                 {
                     var rotatedDirection = rotation * direction;
                     
-                    if (!Physics.SphereCast(Position, radius * 1.2f, rotatedDirection, out RaycastHit hit, gridSize + radius))
+                    if (!Physics.SphereCast(Position, radius, rotatedDirection, out RaycastHit hit, gridSize + radius))
                     {
                         list.Add(Position + rotatedDirection * gridSize);
                     }

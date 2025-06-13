@@ -43,8 +43,6 @@ namespace InstantPipes
 
             _generator = generator;
 
-            FilterClosePoints();
-
             ClearMeshInfo();
 
             var ringPoints = new List<int>();
@@ -145,22 +143,6 @@ namespace InstantPipes
                 next = Points[x] - (Points[x] - Points[x + 1]).normalized * _generator.Curvature;
             else
                 next = (Points[x] + Points[x + 1]) / 2 + (Points[x] - Points[x + 1]).normalized * _ringThickness / 2;
-            
-            if (x == 1)
-            {
-                if ((Points[x] - Points[x - 1]).magnitude > _generator.Curvature + _ringThickness * 2.5f)
-                    prev = Points[x] - (Points[x] - Points[x - 1]).normalized * _generator.Curvature;
-                else
-                    prev = Points[x - 1] + (Points[x] - Points[x - 1]).normalized * _ringThickness * 2.5f;
-            }
-
-            else if (x == Points.Count - 2)
-            {
-                if ((Points[x] - Points[x + 1]).magnitude > _generator.Curvature + _ringThickness * 2.5f)
-                    next = Points[x] - (Points[x] - Points[x + 1]).normalized * _generator.Curvature;
-                else
-                    next = Points[x + 1] + (Points[x] - Points[x + 1]).normalized * _ringThickness * 2.5f;
-            }
 
             Vector3 a = Vector3.Lerp(prev, Points[x], t);
             Vector3 b = Vector3.Lerp(Points[x], next, t);
@@ -351,45 +333,6 @@ namespace InstantPipes
                     _triIndices.Add(edges + i + rootIndex);
                     _triIndices.Add(edges + rootIndex);
                 }
-            }
-        }
-
-        /// <summary>
-        /// 연속된 점들 사이의 거리가 최소 임계값보다 작은 경우 중간 점들을 제거합니다.
-        /// </summary>
-        private void FilterClosePoints()
-        {
-            if (Points.Count <= 2) return;
-
-            // 최소 거리 임계값 (Curvature 값을 기준으로 설정)
-            float minimumDistance = _generator.Curvature * 0.5f + _ringThickness;
-            
-            var filteredPoints = new List<Vector3> { Points[0] }; // 첫 번째 점은 항상 유지
-            
-            for (int i = 1; i < Points.Count - 1; i++)
-            {
-                // 이전에 추가된 점과의 거리를 확인
-                float distanceFromLast = Vector3.Distance(filteredPoints[filteredPoints.Count - 1], Points[i]);
-                
-                // 최소 거리보다 크거나 마지막 점인 경우에만 추가
-                if (distanceFromLast >= minimumDistance)
-                {
-                    filteredPoints.Add(Points[i]);
-                }
-            }
-            
-            // 마지막 점은 항상 유지
-            filteredPoints.Add(Points[Points.Count - 1]);
-            
-            // 필터링된 점이 3개 미만인 경우 원래 점들을 유지 (파이프 생성에 최소 3개 점 필요)
-            if (filteredPoints.Count >= 3)
-            {
-                Points = filteredPoints;
-                //Debug.Log($"Points filtered: {Points.Count} points remaining after filtering");
-            }
-            else
-            {
-                //Debug.LogWarning("Not enough points after filtering, keeping original points");
             }
         }
 

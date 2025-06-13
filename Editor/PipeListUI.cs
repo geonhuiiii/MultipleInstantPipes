@@ -1160,41 +1160,45 @@ namespace InstantPipes
             // 파이프 생성 실행 (메인 스레드에서만 가능)
             bool success = false;
             int newPipesCount = 0;
-            List<float> Chaoses = new List<float> { 5f };
-            List<int> miters = new List<int> { 10 };
+            List<float> Chaoses = new List<float> { 10f};
+            List<int> miters = new List<int> { 2};
             foreach (var miter in miters)
             {
                 foreach (var chaos in Chaoses)
                 {
-                    _generator.Chaos = chaos;
-                    _generator.miter = miter;
-                    Stopwatch sw = new Stopwatch();
-                    sw.Start();
-                    await SwitchToMainThread(() =>
+                    for (int i = 0; i < 1; i++)
                     {
-                        try
+                        _generator.Chaos = chaos;
+                        _generator.miter = miter;
+                        Stopwatch sw = new Stopwatch();
+                        sw.Start();
+                        await SwitchToMainThread(() =>
                         {
-                            // 다중 파이프 생성 실행
-                            success = _generator.AddMultiplePipes(pipeConfigs);
+                            try
+                            {
+                                // 다중 파이프 생성 실행
+                                success = _generator.AddMultiplePipes(pipeConfigs);
 
-                            // 파이프 연결 인덱스 추적
-                            newPipesCount = _generator.Pipes.Count - pipesBefore;
+                                // 파이프 연결 인덱스 추적
+                                newPipesCount = _generator.Pipes.Count - pipesBefore;
 
-                            // 메시 업데이트 진행 중 메시지
-                            UpdateProgress(0.95f, "메시 업데이트 중...");
-                        }
-                        catch (System.Exception ex)
-                        {
-                            _isGeneratingPaths = false;
-                            UnityEngine.Debug.LogError($"파이프 생성 중 오류: {ex.Message}");
-                            EditorUtility.DisplayDialog("오류 발생",
-                                "파이프 생성 중 오류가 발생했습니다.",
-                                "확인");
-                            return;
-                        }
-                    });
-                    sw.Stop();
-                    UnityEngine.Debug.Log("총 소요 시간(ms)" + sw.ElapsedMilliseconds);
+                                // 메시 업데이트 진행 중 메시지
+                                UpdateProgress(0.95f, "메시 업데이트 중...");
+                            }
+                            catch (System.Exception ex)
+                            {
+                                _isGeneratingPaths = false;
+                                UnityEngine.Debug.LogError($"파이프 생성 중 오류: {ex.Message}");
+                                EditorUtility.DisplayDialog("오류 발생",
+                                    "파이프 생성 중 오류가 발생했습니다.",
+                                    "확인");
+                                return;
+                            }
+                        });
+                        sw.Stop();
+                        UnityEngine.Debug.Log("총 소요 시간(ms)" + sw.ElapsedMilliseconds);
+                    }
+                    
                 }
             }
 
@@ -1843,7 +1847,7 @@ namespace InstantPipes
                     if (pipeMaterial.HasProperty("_EmissionColor"))
                     {
                         pipeMaterial.EnableKeyword("_EMISSION");
-                        pipeMaterial.SetColor("_EmissionColor", config.Color * 0.5f);
+                        pipeMaterial.SetColor("_EmissionColor", config.Color);
                     }
                 }
                 else if (pipeMaterial.HasProperty("_Color"))
@@ -1855,7 +1859,7 @@ namespace InstantPipes
                     if (pipeMaterial.HasProperty("_EmissionColor"))
                     {
                         pipeMaterial.EnableKeyword("_EMISSION");
-                        pipeMaterial.SetColor("_EmissionColor", config.Color * 0.5f);
+                        pipeMaterial.SetColor("_EmissionColor", config.Color);
                     }
                 }
 
