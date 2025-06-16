@@ -728,15 +728,17 @@ namespace InstantPipes
             
             //Debug.Log("All pipes cleared");
         }
-        
+
         // 다중 파이프 생성 메서드
-        public bool AddMultiplePipes(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
+        
+        public float AddMultiplePipes(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
         {
+            float shortestPathValue = 0f;
             // 설정 업데이트
             UpdateMultiPathCreatorSettings();
-            
+
             MultiPathCreator.hasCollision = false;
-            
+
             // 파이프 끝점에 임시 충돌체 생성 (경로 탐색용)
             var temporaryColliders = new List<GameObject>();
             // 각 파이프의 시작점과 끝점에 임시 충돌체 생성
@@ -745,120 +747,36 @@ namespace InstantPipes
                 temporaryColliders.Add(CreateTemporaryCollider(config.startPoint, config.startNormal));
                 temporaryColliders.Add(CreateTemporaryCollider(config.endPoint, config.endNormal));
             }
-            
-                    
-            // 원본 설정을 인덱스와 함께 저장
-            var indexedConfigs = pipeConfigs.Select((config, index) => new { config, index }).ToList();
-            
-            var shortestPathValue = float.MaxValue;
-            var bestConfigOrder = new List<int>();
-            bool isCollided = true;
-            
-            // 초기 순서로 첫 번째 시도
-            for (int i = 0; i < indexedConfigs.Count; i++)
+
+
+            // MultiPathCreator에 전달할 형식으로 변환
+            var configs = pipeConfigs.Select(config =>
+                (config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius, config.material)
+            ).ToList();
+            var shortestA = new List<int>();
+            var aaaa = 0;
+            foreach (var config in configs)
             {
-                var config = indexedConfigs[i].config;
-                AddPipe(config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius);
-                bestConfigOrder.Add(i);
+                AddPipe(config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius, config.material);
             }
-            
-            // 초기 경로 길이 계산
-            shortestPathValue = 0f;
+            bool isCollided = MultiPathCreator.hasCollision;
+
+            var shortestPaths = configs;
             for (int j = 0; j < Pipes.Count; j++)
             {
-                shortestPathValue += CalculatePathLength(Pipes[j].Points);
+                var path = Pipes[j].Points;
+                shortestPathValue += CalculatePathLength(path);
             }
-            isCollided = MultiPathCreator.hasCollision;
 
-            // 최적화 반복
-            for (int i = 0; i < miter; i++)
-            {
-                Pipes.Clear();
-                
-                // 인덱스 리스트를 섞기
-                var shuffledIndices = Enumerable.Range(0, indexedConfigs.Count).ToList();
-                ShuffleList(shuffledIndices);
-                
-                // 섞인 순서로 파이프 추가
-                foreach (var index in shuffledIndices)
-                {
-                    var config = indexedConfigs[index].config;
-                    AddPipe(config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius);
-                }
-                
-                float totalPathLength = 0f;
-                bool hasCollision = false;
-                
-                try
-                {
-                    // 경로 길이 계산
-                    for (int j = 0; j < Pipes.Count; j++)
-                    {
-                        totalPathLength += CalculatePathLength(Pipes[j].Points);
-                    }
-                    
-                    // 충돌 검사
-                    foreach (var pipe1 in Pipes)
-                    {
-                        foreach (var pipe2 in Pipes)
-                        {
-                            if (pipe2 == pipe1) continue;
-                            
-                            foreach (var point1 in pipe1.Points)
-                            {
-                                foreach (var point2 in pipe2.Points)
-                                {
-                                    if (Vector3.Distance(point1, point2) < Radius)
-                                    {
-                                        hasCollision = true;
-                                        break;
-                                    }
-                                }
-                                if (hasCollision) break;
-                            }
-                            if (hasCollision) break;
-                        }
-                        if (hasCollision) break;
-                    }
-                    
-                    // 더 나은 해를 찾았는지 확인
-                    if ((totalPathLength < shortestPathValue && !hasCollision) || 
-                        (!hasCollision && isCollided))
-                    {
-                        shortestPathValue = totalPathLength;
-                        bestConfigOrder = new List<int>(shuffledIndices);
-                        isCollided = hasCollision;
-                    }
-                }
-                catch (System.Exception ex)
-                {
-                    Debug.LogError($"경로 계산 중 오류: {ex.Message}");
-                }
-            }
-            
-            // 최적 순서로 최종 파이프 생성
             Pipes.Clear();
-            
-            foreach (var configIndex in bestConfigOrder)
-            {
-                var originalConfig = pipeConfigs[configIndex];
-                Debug.Log($"파이프 {configIndex} 순서로 추가");
-                AddPipe(originalConfig.startPoint, originalConfig.startNormal, 
-                    originalConfig.endPoint, originalConfig.endNormal, 
-                    originalConfig.radius, originalConfig.material);
-            }
-            
-            Debug.Log($"총 거리는 {shortestPathValue} 입니다.");
-            if (isCollided) 
-                Debug.Log("총 경로 중 충돌 발생!");
+            if (isCollided)
+                Debug.Log($"총 경로 중 충돌발생!.");
 
-            // 임시 충돌체 정리
             foreach (var collider in temporaryColliders)
             {
                 if (collider != null) UnityEngine.Object.DestroyImmediate(collider);
             }
-            
-            return true;
+            return shortestPathValue;
         }
         // 경로 시각화 업데이트
         public void UpdatePathVisualization()
@@ -886,26 +804,6 @@ namespace InstantPipes
             visualizer.pipeGenerator = this;
             
             return visualizer;
-        }
-        public List<int> ShuffleList<T>(List<T> list)
-        {
-            var a = new List<int>();
-            UnityEngine.Random.InitState((int)DateTime.Now.Ticks);
-            for(int i = 0 ; i < list.Count ; i++)
-            {
-                a.Add(i);
-            }
-            for (int i = 0; i < list.Count; i++)
-            {
-                int randomIndex = UnityEngine.Random.Range(i, list.Count);
-                T temp = list[i];
-                list[i] = list[randomIndex];
-                list[randomIndex] = temp;
-                int temp2 = a[i];
-                a[i] = a[randomIndex];
-                a[randomIndex] = temp2;
-            }
-            return a;
         }
         public float CalculatePathLength(List<Vector3> points)
         {

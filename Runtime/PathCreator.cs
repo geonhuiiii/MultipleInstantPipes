@@ -54,30 +54,6 @@ namespace InstantPipes
 
             return path;
         }
-        public List<List<Vector3>> CreateMultiplePaths(
-            List<(Vector3 startPosition, Vector3 startNormal, 
-                  Vector3 endPosition, Vector3 endNormal, 
-                  float radius)> pipeConfigs)
-        {
-            hasCollision = false;
-            // 모든 경로에 대한 결과를 저장할 리스트
-            List<List<Vector3>> allPaths = new List<List<Vector3>>();
-            
-            
-            // pipe config 형식 변환
-            List<((float[], string), (float[], string), float, float)> pipes = new List<((float[], string), (float[], string), float, float)>();
-            
-            foreach (var config in pipeConfigs)
-            {
-                var path = Create(config.startPosition, config.startNormal.normalized * Height, config.endPosition, config.endNormal.normalized * Height, config.radius);
-                allPaths.Add(path);
-            }
-            
-            LastPathSuccess = allPaths.Count == pipeConfigs.Count;
-            //Debug.Log($"다중 경로 생성 완료: {(LastPathSuccess ? "모든 경로 성공" : "일부 경로 실패")}");
-            
-            return allPaths;
-        }
 
         private List<Point> FindPath(Point start, Point target, Vector3 startNormal)
         {

@@ -5,7 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks; // Task 클래스 사용을 위해 추가
 using System.Diagnostics;
-
+using System;
 
 namespace InstantPipes
 {
@@ -566,9 +566,9 @@ namespace InstantPipes
         {
             // Create a random color for the new pipe config
             Color randomColor = new Color(
-                Random.Range(0.2f, 0.9f),
-                Random.Range(0.2f, 0.9f),
-                Random.Range(0.2f, 0.9f)
+                UnityEngine.Random.Range(0.2f, 0.9f),
+                UnityEngine.Random.Range(0.2f, 0.9f),
+                UnityEngine.Random.Range(0.2f, 0.9f)
             );
 
             // Create a new pipe config with default values
@@ -925,8 +925,8 @@ namespace InstantPipes
         {
             // 모든 파이프 구성 수집 및 전처리 (스레드 안전하게 데이터만 수집)
             List<PipeInfo> pipesToCreate = new List<PipeInfo>();
-            List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Color color, string name, Material material)> pipeData =
-                new List<(Vector3, Vector3, Vector3, Vector3, float, Color, string, Material)>();
+            List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Color color, string name)> pipeData =
+                new List<(Vector3, Vector3, Vector3, Vector3, float, Color, string)>();
 
             // 메인 스레드에서 데이터 수집
             await Task.Delay(5); // 프레임 넘기기
@@ -939,13 +939,6 @@ namespace InstantPipes
                     {
                         if (config.HasStartPoint && config.HasEndPoint)
                         {
-                            
-                            Material pipeMaterial = new Material(Shader.Find("Universal Render Pipeline/Simple Lit"));
-                            pipeMaterial.name = $"PipeMaterial_{config.Name}";
-                            pipeMaterial.SetColor("_BaseColor", config.Color);
-                            pipeMaterial.EnableKeyword("_EMISSION");
-                            pipeMaterial.SetColor("_EmissionColor", config.Color * 0.5f);
-
                             pipesToCreate.Add(new PipeInfo
                             {
                                 StartPoint = config.StartPoint,
@@ -963,8 +956,7 @@ namespace InstantPipes
                                 config.EndNormal,
                                 config.Radius,
                                 config.Color,
-                                config.Name,
-                                pipeMaterial
+                                config.Name
                             ));
 
 
@@ -1012,8 +1004,8 @@ namespace InstantPipes
             }
 
             // 파이프 생성 정보 처리 (무거운 계산 작업을 백그라운드에서 수행)
-            List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Color color, string name, Material material)>
-                processedPipes = new List<(Vector3, Vector3, Vector3, Vector3, float, Color, string, Material)>();
+            List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Color color, string name)>
+                processedPipes = new List<(Vector3, Vector3, Vector3, Vector3, float, Color, string)>();
 
             // 진행 상태 표시 변수
             int totalPaths = pipeData.Count;
@@ -1165,163 +1157,118 @@ namespace InstantPipes
                 });
                 return;
             }
+
             // 파이프 생성 실행 (메인 스레드에서만 가능)
             bool success = false;
             int newPipesCount = 0;
             List<float> Chaoses = new List<float> { 10f};
             List<int> miters = new List<int> { 2};
-
-            // 매핑 딕셔너리를 메서드 시작 부분에 선언 (스코프 확장)
-            var pipeConfigIndexMap = new Dictionary<(Vector3, Vector3), int>();
-
-            // 매핑 딕셔너리 미리 생성
-            for (int i = 0; i < _pipeConfigs.Count; i++)
-            {
-                var key = (_pipeConfigs[i].StartPoint, _pipeConfigs[i].EndPoint);
-                if (!pipeConfigIndexMap.ContainsKey(key))
-                {
-                    pipeConfigIndexMap[key] = i;
-                }
-            }
-
+            int randTimeOriginal = 0;
+            var pipeConfigsOriginal = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();
+            float shortestPathValue = 9000000f;
             foreach (var miter in miters)
             {
                 foreach (var chaos in Chaoses)
                 {
-                    for (int i = 0; i < 1; i++)
+
+                    for (int i = 0; i < miter; i++)
                     {
                         _generator.Chaos = chaos;
                         _generator.miter = miter;
                         Stopwatch sw = new Stopwatch();
                         sw.Start();
-                        
                         await SwitchToMainThread(() =>
                         {
+                            int randTime = (int)DateTime.Now.Ticks;
+                            UnityEngine.Random.InitState(randTime);
+                            float pathValue = 9999999f;
+                            ShuffleList(pipeConfigs);
                             try
                             {
                                 // 다중 파이프 생성 실행
-                                success = _generator.AddMultiplePipes(pipeConfigs);
+                                pathValue = _generator.AddMultiplePipes(pipeConfigs);
 
-                                // 파이프 연결 인덱스 추적
-                                newPipesCount = _generator.Pipes.Count - pipesBefore;
+                                if (pathValue < shortestPathValue)
+                                {
+                                    shortestPathValue = pathValue;
+                                    randTimeOriginal = randTime;
+                                    pipeConfigsOriginal = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>(pipeConfigs);
+                                    }
 
                                 // 메시 업데이트 진행 중 메시지
-                                UpdateProgress(0.95f, "메시 업데이트 중...");
+                                    UpdateProgress(0.95f, "메시 업데이트 중...");
                             }
                             catch (System.Exception ex)
                             {
                                 _isGeneratingPaths = false;
                                 UnityEngine.Debug.LogError($"파이프 생성 중 오류: {ex.Message}");
                                 EditorUtility.DisplayDialog("오류 발생",
-                                    $"파이프 생성 중 오류가 발생했습니다: {ex.Message}",
+                                    "파이프 생성 중 오류가 발생했습니다.",
                                     "확인");
                                 return;
                             }
                         });
-                        
                         sw.Stop();
-                        UnityEngine.Debug.Log($"총 소요 시간(ms): {sw.ElapsedMilliseconds}");
+                        UnityEngine.Debug.Log("총 소요 시간(ms)" + sw.ElapsedMilliseconds);
                     }
+
                 }
             }
-
-        
-            // 파이프 생성 결과 처리 (메인 스레드에서만 가능)
             await SwitchToMainThread(() =>
             {
+                int randTime = (int)DateTime.Now.Ticks;
+                UnityEngine.Random.InitState(randTimeOriginal);
+                ShuffleList(pipeConfigs);
                 try
                 {
-                    if (newPipesCount == pipeConfigs.Count)
-                    {
-                        // 순서대로 매핑 (AddMultiplePipes에서 bestConfigOrder 순서대로 생성됨)
-                        for (int i = 0; i < System.Math.Min(pipeData.Count, newPipesCount); i++)
-                        {
-                            var pipeInfo = pipeData[i];
-                            var key = (pipeInfo.startPoint, pipeInfo.endPoint);
-
-                            if (pipeConfigIndexMap.TryGetValue(key, out int configIndex))
-                            {
-                                UnityEngine.Debug.Log($"파이프 {i} -> 설정 인덱스 {configIndex}");
-                                _pipeConfigs[configIndex].AssociatedPipeIndices.Add(i);
-                            }
-                            else
-                            {
-                                UnityEngine.Debug.LogWarning($"파이프 인덱스 {i}에 대응하는 설정을 찾을 수 없습니다. " +
-                                    $"시작점: {pipeInfo.startPoint}, 끝점: {pipeInfo.endPoint}");
-
-                                // 대안: 가장 가까운 설정 찾기
-                                float minDistance = float.MaxValue;
-                                int closestConfigIndex = -1;
-
-                                for (int j = 0; j < _pipeConfigs.Count; j++)
-                                {
-                                    float startDist = Vector3.Distance(_pipeConfigs[j].StartPoint, pipeInfo.startPoint);
-                                    float endDist = Vector3.Distance(_pipeConfigs[j].EndPoint, pipeInfo.endPoint);
-                                    float totalDist = startDist + endDist;
-
-                                    if (totalDist < minDistance)
-                                    {
-                                        minDistance = totalDist;
-                                        closestConfigIndex = j;
-                                    }
-                                }
-
-                                if (closestConfigIndex >= 0 && minDistance < 0.1f) // 임계값 설정
-                                {
-                                    UnityEngine.Debug.Log($"가장 가까운 설정 {closestConfigIndex}으로 매핑");
-                                    _pipeConfigs[closestConfigIndex].AssociatedPipeIndices.Add(i);
-                                }
-                            }
-                        }
-
-                        // 완료 메시지 표시
-                        UpdateProgress(1.0f, "작업 완료!");
-
-                        // 1초 후 진행 상태 표시 닫기
-                        EditorApplication.delayCall += () =>
-                        {
-                            // 생성 완료 후 상태 초기화
-                            _isGeneratingPaths = false;
-                            Repaint();
-
-                            if (success)
-                            {
-                                EditorUtility.DisplayDialog("경로 생성 완료",
-                                    $"{newPipesCount}개의 파이프가 성공적으로 생성되었습니다" +
-                                    (isCancelled ? " (작업이 일부 취소됨)." : "."),
-                                    "확인");
-                            }
-                            else
-                            {
-                                EditorUtility.DisplayDialog("경로 생성 경고",
-                                    "경로가 생성되었지만, 일부는 최적으로 생성되지 않았을 수 있습니다.",
-                                    "확인");
-                            }
-                        };
-                    }
-                    else
-                    {
-                        _isGeneratingPaths = false;
-                        EditorUtility.DisplayDialog("경로 생성 오류",
-                            $"{pipeConfigs.Count}개의 파이프를 생성하려 했지만, {newPipesCount}개만 생성되었습니다.",
-                            "확인");
-                    }
-
-                    // 씬 업데이트
-                    UpdateAllPipeMaterials();
-                    SceneView.RepaintAll();
+                    // 다중 파이프 생성 실행
+                    shortestPathValue = _generator.AddMultiplePipes(pipeConfigsOriginal);
+                    UnityEngine.Debug.Log($"최소 경로 거리 {shortestPathValue}");
                 }
                 catch (System.Exception ex)
                 {
                     _isGeneratingPaths = false;
-                    UnityEngine.Debug.LogError($"파이프 매핑 중 오류: {ex.Message}");
-                    EditorUtility.DisplayDialog("매핑 오류",
-                        $"파이프 매핑 중 오류가 발생했습니다: {ex.Message}",
+                    UnityEngine.Debug.LogError($"파이프 생성 중 오류: {ex.Message}");
+                    EditorUtility.DisplayDialog("오류 발생",
+                        "파이프 생성 중 오류가 발생했습니다.",
                         "확인");
+                    return;
                 }
             });
-        }
 
+
+            // 파이프 생성 결과 처리 (메인 스레드에서만 가능)
+            await SwitchToMainThread(() =>
+            {
+                for (int i = 0; i < pipeConfigs.Count; i++)
+                {
+                    int configIndex = pipesToCreate.FindIndex(p =>
+                            p.StartPoint == pipeConfigs[i].startPoint &&
+                            p.EndPoint == pipeConfigs[i].endPoint);
+
+                    if (configIndex >= 0 && configIndex < pipesToCreate.Count)
+                    {
+                        int pipeIndex = i;
+                        pipesToCreate[configIndex].Config.AssociatedPipeIndices.Add(pipeIndex);
+                    }
+                }
+                    // 완료 메시지 표시
+                UpdateProgress(1.0f, "작업 완료!");
+
+                    // 1초 후 진행 상태 표시 닫기
+                    EditorApplication.delayCall += () =>
+                    {
+                        // 생성 완료 후 상태 초기화
+                        _isGeneratingPaths = false;
+                        Repaint();
+
+                    };
+
+                // 씬 업데이트
+                UpdateAllPipeMaterials();
+                SceneView.RepaintAll();
+            });
+        }
 
         // 메인 스레드에서 작업을 실행하기 위한 헬퍼 메서드
         private async Task SwitchToMainThread(System.Action action)
@@ -1682,52 +1629,84 @@ namespace InstantPipes
         private void UpdateAllPipeMaterials()
         {
             if (_generator == null) return;
-
+            
             // Get renderer for material access
             Renderer renderer = _generator.GetComponent<Renderer>();
             if (renderer == null) return;
-
-            Material[] materials = renderer.sharedMaterials;
-            if (materials == null || materials.Length == 0) return;
-
-            // Check if we need to create materials
-            bool needsRecreatedMaterials = false;
-
-            // Update each pipe's material based on its configuration
+            
+            // 원본 materials를 복사해서 작업 (sharedMaterials 직접 수정 방지)
+            Material[] originalMaterials = renderer.sharedMaterials;
+            if (originalMaterials == null) originalMaterials = new Material[0];
+            
+            // 필요한 최대 인덱스 계산
+            int maxPipeIndex = -1;
             foreach (var config in _pipeConfigs)
             {
                 foreach (int pipeIndex in config.AssociatedPipeIndices)
                 {
                     if (pipeIndex >= 0 && pipeIndex < _generator.Pipes.Count)
                     {
-                        // Make sure we have enough materials
-                        if (pipeIndex >= materials.Length)
-                        {
-                            needsRecreatedMaterials = true;
-                            continue;
-                        }
-
-                        // Create a material if needed
+                        maxPipeIndex = Mathf.Max(maxPipeIndex, pipeIndex);
+                    }
+                }
+            }
+            
+            // 충분한 크기의 새 메테리얼 배열 생성
+            int requiredSize = Mathf.Max(originalMaterials.Length, maxPipeIndex + 1);
+            Material[] materials = new Material[requiredSize];
+            
+            // 기존 메테리얼 복사
+            for (int i = 0; i < originalMaterials.Length; i++)
+            {
+                materials[i] = originalMaterials[i];
+            }
+            
+            // 부족한 메테리얼 슬롯에 기본 메테리얼 생성
+            for (int i = originalMaterials.Length; i < requiredSize; i++)
+            {
+                materials[i] = new Material(Shader.Find("Standard"));
+                materials[i].name = $"Pipe_{i}_Material";
+            }
+            
+            // Update each pipe's material based on its configuration
+            foreach (var config in _pipeConfigs)
+            {
+                foreach (int pipeIndex in config.AssociatedPipeIndices)
+                {
+                    if (pipeIndex >= 0 && pipeIndex < _generator.Pipes.Count && pipeIndex < materials.Length)
+                    {
+                        // Create a new material instance if it's null or shared
                         if (materials[pipeIndex] == null)
                         {
                             materials[pipeIndex] = new Material(Shader.Find("Standard"));
                             materials[pipeIndex].name = $"Pipe_{pipeIndex}_Material";
                         }
-
+                        else if (AssetDatabase.Contains(materials[pipeIndex]))
+                        {
+                            // 에셋 메테리얼인 경우 인스턴스 생성
+                            materials[pipeIndex] = new Material(materials[pipeIndex]);
+                            materials[pipeIndex].name = $"Pipe_{pipeIndex}_Material";
+                        }
+                        
                         // Update material color
                         materials[pipeIndex].color = config.Color;
+                        
+                        UnityEngine.Debug.Log($"파이프 {pipeIndex}에 색상 {config.Color} 할당됨");
                     }
                 }
             }
-
+            
             // Apply the updated materials
-            renderer.sharedMaterials = materials;
-
-            // If we need to recreate materials, update the mesh to ensure correct material count
-            if (needsRecreatedMaterials)
+            renderer.materials = materials; // sharedMaterials 대신 materials 사용
+            
+            // 메시 업데이트가 필요한 경우
+            if (requiredSize != originalMaterials.Length)
             {
+                UnityEngine.Debug.Log($"메테리얼 배열 크기 변경: {originalMaterials.Length} -> {requiredSize}");
                 _generator.UpdateMesh();
             }
+            
+            UnityEngine.Debug.Log($"메테리얼 업데이트 완료: {materials.Length}개 메테리얼");
         }
 
         // Method to regenerate pipes with new radius
@@ -2020,6 +1999,25 @@ namespace InstantPipes
             public Color Color;
             public float Radius;
             public PipeConfig Config;
+        }
+        public List<int> ShuffleList<T>(List<T> list)
+        {
+            var a = new List<int>();
+            for(int i = 0 ; i < list.Count ; i++)
+            {
+                a.Add(i);
+            }
+            for (int i = 0; i < list.Count; i++)
+            {
+                int randomIndex = UnityEngine.Random.Range(i, list.Count);
+                T temp = list[i];
+                list[i] = list[randomIndex];
+                list[randomIndex] = temp;
+                int temp2 = a[i];
+                a[i] = a[randomIndex];
+                a[randomIndex] = temp2;
+            }
+            return a;
         }
     }
 
