@@ -133,7 +133,16 @@ namespace InstantPipes
         private BezierPoint GetBezierPoint(float t, int x)
         {
             Vector3 prev, next;
+            if ((Points[x] - Points[x - 1]).magnitude > _generator.Curvature * 2 + _ringThickness)
+                prev = Points[x] - (Points[x] - Points[x - 1]).normalized * _generator.Curvature;
+            else
+                prev = (Points[x] + Points[x - 1]) / 2 + (Points[x -1 ] - Points[x]).normalized * _ringThickness / 2;
 
+            if ((Points[x] - Points[x + 1]).magnitude > _generator.Curvature * 2 + _ringThickness)
+                next = Points[x] - (Points[x] - Points[x + 1]).normalized * _generator.Curvature;
+            else
+                next = (Points[x] + Points[x + 1]) / 2 + (Points[x + 1] - Points[x]).normalized * _ringThickness / 2;
+            /*
             if ((Points[x] - Points[x - 1]).magnitude > _generator.Curvature * 2 + _ringThickness)
                 prev = Points[x] - (Points[x] - Points[x - 1]).normalized * _generator.Curvature;
             else
@@ -143,7 +152,7 @@ namespace InstantPipes
                 next = Points[x] - (Points[x] - Points[x + 1]).normalized * _generator.Curvature;
             else
                 next = (Points[x] + Points[x + 1]) / 2 + (Points[x] - Points[x + 1]).normalized * _ringThickness / 2;
-
+            */
             Vector3 a = Vector3.Lerp(prev, Points[x], t);
             Vector3 b = Vector3.Lerp(Points[x], next, t);
             var position = Vector3.Lerp(a, b, t);

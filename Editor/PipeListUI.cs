@@ -1162,7 +1162,7 @@ namespace InstantPipes
             bool success = false;
             int newPipesCount = 0;
             List<float> Chaoses = new List<float> { 10f};
-            List<int> miters = new List<int> { 2};
+            List<int> miters = new List<int> { 1};
             int randTimeOriginal = 0;
             var pipeConfigsOriginal = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();
             float shortestPathValue = 9000000f;

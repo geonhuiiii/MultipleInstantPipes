@@ -50,7 +50,7 @@ namespace InstantPipes
         private Mesh _mesh;
 
         public List<Pipe> Pipes = new List<Pipe>();
-        public PathCreator MultiPathCreator = new PathCreator();
+        public PathCreatorDstar MultiPathCreator = new PathCreatorDstar();
         private float _maxDistanceBetweenPoints;
         public float MaxCurvature => _maxDistanceBetweenPoints / 2;
 
@@ -589,7 +589,7 @@ namespace InstantPipes
         {
             var tempCollider = new GameObject("TempEndpointCollider");
             tempCollider.transform.position = point + (normal * Height) / 2;
-            tempCollider.transform.localScale = new Vector3(Radius * 2, Height*1.1f, Radius * 2);
+            tempCollider.transform.localScale = new Vector3(Radius * 2, Height*1.1f, Radius * 2); //1.1f 가 원래
             tempCollider.transform.rotation = Quaternion.FromToRotation(Vector3.up, normal);
             tempCollider.AddComponent<CapsuleCollider>();
             
@@ -767,7 +767,7 @@ namespace InstantPipes
                 var path = Pipes[j].Points;
                 shortestPathValue += CalculatePathLength(path);
             }
-
+            
             Pipes.Clear();
             if (isCollided)
                 Debug.Log($"총 경로 중 충돌발생!.");
