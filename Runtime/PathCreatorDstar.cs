@@ -1,8 +1,231 @@
 using System.Collections.Generic;
 using UnityEngine;
 using System;
+using System.Threading.Tasks;
+using System.Threading;
+using System.Collections.Concurrent;
 namespace InstantPipes
 {
+    // 파이프 경로 요청 정보
+    [System.Serializable]
+    public class PathRequest
+    {
+        public int pipeId;
+        public Vector3 startPoint;
+        public Vector3 startNormal;
+        public Vector3 endPoint;
+        public Vector3 endNormal;
+        public float pipeRadius;
+        public int priority; // 우선순위 (낮을수록 높은 우선순위)
+        
+        public PathRequest(int id, Vector3 start, Vector3 startNorm, Vector3 end, Vector3 endNorm, float radius, int prio = 0)
+        {
+            pipeId = id;
+            startPoint = start;
+            startNormal = startNorm;
+            endPoint = end;
+            endNormal = endNorm;
+            pipeRadius = radius;
+            priority = prio;
+        }
+    }
+
+    // 경로 탐색 결과
+    [System.Serializable]
+    public class PathResult
+    {
+        public int pipeId;
+        public List<Vector3> path;
+        public bool success;
+        public bool hasCollision;
+        
+        public PathResult(int id, List<Vector3> pathPoints, bool isSuccess, bool collision = false)
+        {
+            pipeId = id;
+            path = pathPoints ?? new List<Vector3>();
+            success = isSuccess;
+            hasCollision = collision;
+        }
+    }
+
+    // 멀티스레딩 매니저
+    public class MultiThreadPathFinder
+    {
+        private readonly ConcurrentQueue<PathRequest> pendingRequests = new();
+        private readonly ConcurrentDictionary<int, PathResult> completedResults = new();
+        private readonly SemaphoreSlim semaphore;
+        private readonly Dictionary<Vector3, bool> sharedObstacleData = new();
+        private readonly object obstacleDataLock = new object();
+        private bool isInitialized = false;
+        
+        public MultiThreadPathFinder(int maxConcurrentTasks = 4)
+        {
+            semaphore = new SemaphoreSlim(maxConcurrentTasks, maxConcurrentTasks);
+        }
+
+        // 메인 스레드에서 초기 장애물 데이터 수집
+        public void InitializeObstacleData(Vector3 center, float range, LayerMask layerMask, float gridSize)
+        {
+            lock (obstacleDataLock)
+            {
+                sharedObstacleData.Clear();
+                
+                Collider[] hits = Physics.OverlapSphere(center, range, layerMask);
+                foreach (var hit in hits)
+                {
+                    Vector3 pos = SnapToGrid(hit.transform.position, gridSize);
+                    sharedObstacleData[pos] = true;
+                    
+                    // 주변 그리드도 장애물로 표시 (안전 마진)
+                    Vector3[] directions = {
+                        Vector3.forward, Vector3.back, Vector3.left, 
+                        Vector3.right, Vector3.up, Vector3.down
+                    };
+                    
+                    foreach (var dir in directions)
+                    {
+                        Vector3 adjacentPos = SnapToGrid(pos + dir * gridSize, gridSize);
+                        sharedObstacleData[adjacentPos] = true;
+                    }
+                }
+                
+                isInitialized = true;
+                Debug.Log($"[멀티스레딩] 장애물 데이터 초기화 완료: {sharedObstacleData.Count}개 위치");
+            }
+        }
+        
+        public bool IsObstacleThreadSafe(Vector3 position, float gridSize)
+        {
+            if (!isInitialized) return false;
+            
+            Vector3 key = SnapToGrid(position, gridSize);
+            lock (obstacleDataLock)
+            {
+                return sharedObstacleData.ContainsKey(key) && sharedObstacleData[key];
+            }
+        }
+        
+        // 경로 요청 추가
+        public void AddRequest(PathRequest request)
+        {
+            pendingRequests.Enqueue(request);
+        }
+        
+        // 모든 요청에 대해 초기 경로 탐색 (병렬)
+        public async Task ProcessInitialPathsAsync()
+        {
+            var tasks = new List<Task>();
+            var requests = new List<PathRequest>();
+            
+            // 모든 요청을 리스트로 수집
+            while (pendingRequests.TryDequeue(out var request))
+            {
+                requests.Add(request);
+            }
+            
+            Debug.Log($"[멀티스레딩] 초기 경로 탐색 시작: {requests.Count}개 파이프");
+            
+            // 병렬로 초기 경로 탐색
+            foreach (var request in requests)
+            {
+                tasks.Add(ProcessSingleRequestAsync(request, isInitialPass: true));
+            }
+            
+            await Task.WhenAll(tasks);
+            Debug.Log("[멀티스레딩] 초기 경로 탐색 완료");
+        }
+        
+        // 우선순위 순으로 순차 경로 탐색
+        public async Task ProcessPriorityPathsAsync()
+        {
+            var sortedRequests = new List<PathRequest>();
+            
+            // 완료된 결과를 다시 요청으로 변환 (우선순위 정렬용)
+            foreach (var result in completedResults.Values)
+            {
+                if (result.success) continue; // 이미 성공한 경로는 재처리하지 않음
+                
+                // 실패한 요청을 다시 처리하기 위해 원래 요청 정보가 필요
+                // 여기서는 간단히 기존 결과를 이용
+            }
+            
+            // 우선순위 순으로 정렬
+            sortedRequests.Sort((a, b) => a.priority.CompareTo(b.priority));
+            
+            Debug.Log($"[멀티스레딩] 우선순위 기반 경로 탐색 시작: {sortedRequests.Count}개 파이프");
+            
+            // 순차적으로 처리
+            foreach (var request in sortedRequests)
+            {
+                await ProcessSingleRequestAsync(request, isInitialPass: false);
+            }
+            
+            Debug.Log("[멀티스레딩] 우선순위 기반 경로 탐색 완료");
+        }
+        
+        private async Task ProcessSingleRequestAsync(PathRequest request, bool isInitialPass)
+        {
+            await semaphore.WaitAsync();
+            
+            try
+            {
+                await Task.Run(() =>
+                {
+                    var pathCreator = new PathCreatorDstar();
+                    pathCreator.SetObstacleDataFromShared(sharedObstacleData, obstacleDataLock);
+                    
+                    var path = pathCreator.Create(
+                        request.startPoint, 
+                        request.startNormal, 
+                        request.endPoint, 
+                        request.endNormal, 
+                        request.pipeRadius
+                    );
+                    
+                    var result = new PathResult(
+                        request.pipeId, 
+                        path, 
+                        pathCreator.LastPathSuccess, 
+                        pathCreator.hasCollision
+                    );
+                    
+                    completedResults.AddOrUpdate(request.pipeId, result, (key, oldValue) => result);
+                    
+                    string passType = isInitialPass ? "초기" : "우선순위";
+                    Debug.Log($"[멀티스레딩] {passType} 경로 탐색 완료 - ID: {request.pipeId}, 성공: {result.success}");
+                });
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        }
+        
+        public PathResult GetResult(int pipeId)
+        {
+            completedResults.TryGetValue(pipeId, out var result);
+            return result;
+        }
+        
+        public Dictionary<int, PathResult> GetAllResults()
+        {
+            return new Dictionary<int, PathResult>(completedResults);
+        }
+        
+        public void ClearResults()
+        {
+            completedResults.Clear();
+        }
+        
+        private static Vector3 SnapToGrid(Vector3 pos, float gridSize)
+        {
+            float x = Mathf.Round(pos.x / gridSize) * gridSize;
+            float y = Mathf.Round(pos.y / gridSize) * gridSize;
+            float z = Mathf.Round(pos.z / gridSize) * gridSize;
+            return new Vector3(x, y, z);
+        }
+    }
+
     [System.Serializable]
     public class PathCreatorDstar
     {
@@ -242,41 +465,69 @@ namespace InstantPipes
             return neighbors;
         }
         private Dictionary<Vector3, bool> obstacleCache = new();
+        
+        // 멀티스레딩 지원을 위한 필드들
+        private Dictionary<Vector3, bool> sharedObstacleData;
+        private object sharedObstacleDataLock;
+        private bool useSharedObstacleData = false;
+        
+        // 공유 장애물 데이터 설정 (멀티스레딩용)
+        public void SetObstacleDataFromShared(Dictionary<Vector3, bool> sharedData, object lockObject)
+        {
+            sharedObstacleData = sharedData;
+            sharedObstacleDataLock = lockObject;
+            useSharedObstacleData = true;
+        }
+        
         private bool IsObstacle(Vector3 position)
         {
-            Vector3[] directions = new Vector3[]
-            {
-                Vector3.forward,
-                Vector3.back,
-                Vector3.left,
-                Vector3.right,
-                Vector3.up,
-                Vector3.down
-            };
-            // 그리드에 스냅해서 비교 정확도 향상
             Vector3 key = SnapToGrid(position, GridSize);
 
-            if (obstacleCache.TryGetValue(key, out bool isObstacle))
+            // 캐시 확인
+            if (obstacleCache.TryGetValue(key, out bool cachedResult))
             {
-                return isObstacle;
+                return cachedResult;
             }
 
-            float checkRadius = Radius * obstacleAvoidanceMargin;
-            for (int i = 0; i < directions.Length; i++)
+            bool isObstacle = false;
+            
+            if (useSharedObstacleData)
             {
-                Vector3 dir = directions[i];
+                // 멀티스레딩 환경에서는 공유 데이터 사용
+                lock (sharedObstacleDataLock)
+                {
+                    isObstacle = sharedObstacleData.ContainsKey(key) && sharedObstacleData[key];
+                }
+            }
+            else
+            {
+                // 메인 스레드에서는 Physics API 사용
+                Vector3[] directions = new Vector3[]
+                {
+                    Vector3.forward,
+                    Vector3.back,
+                    Vector3.left,
+                    Vector3.right,
+                    Vector3.up,
+                    Vector3.down
+                };
+                
+                float checkRadius = Radius * obstacleAvoidanceMargin;
+                for (int i = 0; i < directions.Length; i++)
+                {
+                    Vector3 dir = directions[i];
 
-                if (Physics.Raycast(key, dir, out RaycastHit hit, 1f, obstacleLayerMask))
-                {
-                    obstacleCache[key] = true;
-                    return true;
+                    if (Physics.Raycast(key, dir, out RaycastHit hit, 1f, obstacleLayerMask))
+                    {
+                        isObstacle = true;
+                        break;
+                    }
                 }
-                else
-                {
-                }
-            } // 결과 캐싱
-            obstacleCache[key] = false;
-            return false;
+            }
+
+            // 결과 캐싱
+            obstacleCache[key] = isObstacle;
+            return isObstacle;
         }
         private void UpdateVertex(Vector3 u)
         {
@@ -290,10 +541,12 @@ namespace InstantPipes
                 {
                     float cost = Cost(u, s);
                     float g_s = GetNode(s).g;
-                    Debug.Log($"u: {u}, s: {s}, cost: {cost}, g(s): {g_s}");
-
-                    float total = cost + g_s;
-                    if (total < minRhs) minRhs = total;
+                    
+                    if (cost != Mathf.Infinity) // 무한대 비용이 아닌 경우만 고려
+                    {
+                        float total = cost + g_s;
+                        if (total < minRhs) minRhs = total;
+                    }
                 }
 
                 uNode.rhs = minRhs;
@@ -302,7 +555,7 @@ namespace InstantPipes
 
             openList.Remove(uNode);
 
-            if (uNode.g != uNode.rhs)
+            if (Mathf.Abs(uNode.g - uNode.rhs) > 0.001f) // 부동소수점 오차 고려
             {
                 Debug.Log($"Enqueue {u} with key {CalculateKey(u)}");
                 openList.Enqueue(uNode, CalculateKey(u));
@@ -312,17 +565,27 @@ namespace InstantPipes
         public void ComputeShortestPath()
         {
             var iteration = 0;
-            Debug.Log(openList.Peek());
-            Debug.Log($"start {CalculateKey(start)}");
-            while (openList.Count > 0 &&
-                    (CompareKey(openList.Peek(), CalculateKey(start)) < 0 ||
-                    GetNode(start).g != GetNode(start).rhs) && MaxIterations > iteration)
+            
+            while (openList.Count > 0 && iteration < MaxIterations)
             {
-                if (CompareKey(openList.Peek(), CalculateKey(start)) < 0)
-                    Debug.Log("잠은 잘 수 있겠지");
+                var currentKey = openList.Peek();
+                var startKey = CalculateKey(start);
+                var startNode = GetNode(start);
+                
+                // 종료 조건: start 노드가 consistent하고(g == rhs) key가 start보다 크거나 같으면 종료
+                if ((CompareKey(currentKey, startKey) >= 0) && 
+                    (Mathf.Abs(startNode.g - startNode.rhs) < 0.001f))
+                {
+                    Debug.Log($"[종료] iteration: {iteration}, start g: {startNode.g}, rhs: {startNode.rhs}");
+                    break;
+                }
+                
                 iteration++;
                 var u = openList.Dequeue();
                 var uPos = u.position;
+                
+                Debug.Log($"[처리중] iteration: {iteration}, pos: {uPos}, g: {u.g}, rhs: {u.rhs}");
+                
                 if (u.g > u.rhs)
                 {
                     u.g = u.rhs;
@@ -336,6 +599,12 @@ namespace InstantPipes
                     foreach (var s in GetNeighbors(uPos))
                         UpdateVertex(s);
                 }
+            }
+            
+            if (iteration >= MaxIterations)
+            {
+                Debug.LogWarning($"[DStar] 최대 반복 횟수 도달: {MaxIterations}");
+                LastPathSuccess = false;
             }
         }
 
