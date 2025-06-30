@@ -1,88 +1,191 @@
-# Instant Pipes
+# 멀티스레딩 파이프 경로 탐색 시스템
 
-An editor tool for procedurally generating pipes by just dragging the cursor from start to end — the pipe will find the path in a customizable way.
+Unity에서 D* 알고리즘을 사용한 멀티스레딩 파이프 경로 탐색 시스템입니다.
 
-![Unity_3wtlMTU9I1](https://github.com/letharqic/InstantPipes/assets/44412176/912f3879-1d82-4408-8cef-2698b82608a0)
+## 🔧 해결된 문제들
 
-## Compatibility
+### 1. D* 알고리즘 무한 루프 문제
+- **문제**: `ComputeShortestPath()` 함수에서 경로를 찾았음에도 루프에서 나오지 않음
+- **해결**: 
+  - 부동소수점 오차를 고려한 종료 조건 개선
+  - 무한대 비용 처리 로직 수정
+  - 최대 반복 횟수 제한 추가
 
-Unity 2019.4 or higher.
+### 2. 멀티스레딩 지원 추가
+- **문제**: 모든 파이프가 순차적으로 처리되어 성능이 낮음
+- **해결**:
+  - Unity Physics API와 분리된 멀티스레딩 아키텍처 구현
+  - 초기 장애물 데이터는 메인 스레드에서 수집
+  - 경로 탐색은 백그라운드 스레드에서 병렬 처리
+  - 추가된 순서 기반 순차 최적화 단계 추가
 
-## Installation
+## 🚀 주요 기능
 
-Add the package to your project via the [Package Manager](https://docs.unity3d.com/Manual/upm-ui.html) using the Git URL
-`https://github.com/leth4/InstantPipes.git`. You can also clone the repository and point the Package Manager to your local copy.
+- **병렬 초기 경로 탐색**: 모든 파이프가 동시에 초기 경로를 탐색
+- **순서 기반 최적화**: 추가된 순서대로 순차 경로 최적화
+- **스레드 안전**: Unity Physics API 사용 없이 안전한 멀티스레딩
+- **충돌 감지**: 경로상 장애물과의 충돌 여부 체크
+- **시각화 지원**: LineRenderer를 통한 경로 시각화
 
-## Usage
+## 📦 구성 요소
 
-### Starting out
+### 핵심 클래스
 
-1. Create an empty GameObject and set its world position to zero.
-2. Add a `Pipe Generator` component.
-3. Select a material for the `Material` property.
+1. **`PathCreatorDstar`**: D* 알고리즘 구현체
+2. **`MultiThreadPathFinder`**: 멀티스레딩 경로 탐색 매니저
+3. **`MultiThreadPipeManager`**: Unity MonoBehaviour 래퍼
+4. **`PipePathExample`**: 사용 예시 스크립트
 
-If you're facing problems, visit the troubleshooting section.
+### 데이터 클래스
 
-Ctrl+Z works with all actions. When you're commited to the pipes, you can just remove the component, the mesh will stay.
+- **`PathRequest`**: 경로 탐색 요청 정보
+- **`PathResult`**: 경로 탐색 결과
 
-### Pipes Settings
+## 🎮 사용법
 
-- `Curvature` changes the length of the curved parts, making pipes appear more or less curvy. Note that it applies after pathfinding, so in some cases high curvature value can make pipes intersect.
-- `Edges` property selects how many edges the pipes will have, and `Segments` is the amount of subdivisions in curved parts. 
-- You can toggle `Rings` and `End Caps` and separately set up their radius and thickness.
-- Additionally, you can toggle `Extrusion` under the `Rings` label, replacing rings with extruded curved elements, like on plastic pipes. 
+### 1. 기본 설정
 
-### Using pathfinding
+```csharp
+// GameObject에 MultiThreadPipeManager 컴포넌트 추가
+var pipeManager = gameObject.AddComponent<MultiThreadPipeManager>();
 
-In the component inspector, select the `Create` tab. Now in the scene view start dragging your cursor where you want the pipe to start, end let go where you want it to end; a pipe will appear.
+// 초기화
+await pipeManager.InitializeAsync();
+```
 
-The tool uses A* pathfinding without a predefined grid — by raycasting from a point to the next points. Pipes can only detect colliders as obstacles.
+### 2. 파이프 요청 추가
 
-Property | Explanation
-:- | :-
-Preview Path | Will preview how the pipe will look like while dragging. Can be slow with complex pipes!
-Amount | How many pipes will be created at once; each one will have an individual path.
-Max Iterations | How many points will the algorithm check before giving up.
-Grid Y Angle | Rotates the Y axis of the pathfinding grid that every pipes have to follow.
-Grid Size | The distance between searched points; making it too small can produce bad results.
-Height | How high the first and the last segment of a pipe will be. This value can't be smaller than grid size.
-Chaos | Adds randomness to the pathfinding, making paths twisted and chaotic.
-Straight Priority | Makes the algorithm prefer straight paths over turns.
-Near Obstacle Priority | Makes the pipes stay close to obstacles.
+```csharp
+// 파이프 경로 요청 추가
+pipeManager.AddPipeRequest(
+    pipeId: 0,
+    startPoint: new Vector3(0, 0, 0),
+    startNormal: Vector3.up,
+    endPoint: new Vector3(10, 5, 0),
+    endNormal: Vector3.down,
+    radius: 1f
+);
+```
 
-![image](https://github.com/letharqic/InstantPipes/assets/44412176/a076dcf6-21d2-46b1-80c9-70cdbd59b00e)
+### 3. 경로 탐색 실행
 
-### Manual Editing
+```csharp
+// 모든 파이프 처리 (멀티스레딩)
+await pipeManager.ProcessAllPipesAsync();
 
-In the component inspector, select the `Edit` tab. Select one of the points in the scene view by clicking on it, and then you can:
-- Move the selected points in the scene view
-- Input the exact positions for the selected points in the inspector
-- Delete the point or the entire pipe via a button in the inspector
-- Insert a new point via a button in the inspector
+// 결과 확인
+var result = pipeManager.GetPipeResult(0);
+if (result.success)
+{
+    Debug.Log($"경로점 수: {result.path.Count}, 충돌: {result.hasCollision}");
+}
+```
 
-Hold `shift` to select multiple points. Press `A` to select every point of the selected pipe.
+### 4. 간단한 사용 예시
 
-Every pipe is a separate submesh, so you can assign separate materials by dragging them into the scene view.
+```csharp
+// PipePathExample 컴포넌트 사용
+public class MyPipeController : MonoBehaviour
+{
+    public PipePathExample pipeExample;
+    
+    async void Start()
+    {
+        // 예시 실행
+        await pipeExample.ProcessMultiplePipesExample();
+        
+        // 모든 경로 시각화
+        pipeExample.VisualizeAllPaths();
+    }
+}
+```
 
-## Troubleshooting
+## ⚙️ 설정 옵션
 
-> Getting an error when trying to build
+### MultiThreadPipeManager 설정
 
-- That was recently patched, so please update the package or download the latest version of the tool.
+```csharp
+[Header("경로 탐색 설정")]
+public LayerMask obstacleLayerMask = -1;    // 장애물 레이어
+public float detectionRange = 100f;         // 장애물 탐지 범위
+public float gridSize = 3f;                 // 그리드 크기
+public int maxConcurrentTasks = 4;          // 최대 동시 실행 스레드 수
 
-> Pipes appear squashed
+[Header("디버그")]
+public bool enableDebugLogs = true;         // 디버그 로그 출력
+```
 
-- Toggle and re-toggle rings, that should fix it. Will hopefully find a proper fix soon.
+### PathCreatorDstar 설정
 
-> Dragging my cursor doesn't do anything
+```csharp
+public float Height = 5;                    // 파이프 높이
+public float GridRotationY = 0;             // 그리드 회전
+public float Radius = 1;                    // 파이프 반지름
+public float GridSize = 3;                  // 그리드 크기
+public float NearObstaclesPriority = 100;   // 장애물 회피 가중치
+public int MaxIterations = 1000;            // 최대 반복 횟수
+public float obstacleAvoidanceMargin = 1.5f; // 장애물 회피 여백
+```
 
-- Make sure you have the `Create` tab selected
-- Make sure you're pointing at a surface with a collider
-- Make sure Gizmos are enabled
-- If nothing else helped, try resetting the editor layout to default
+## 🔍 실행 단계
 
-> Pipes can't find a way
+### 1단계: 초기화
+- 씬의 모든 장애물 데이터를 메인 스레드에서 수집
+- 그리드 기반으로 장애물 위치 캐싱
 
-- Set the `Iterations` higher, that will make the algorithm try for longer before giving up
-- Set the `Grid Size` higher, this way the algorithm can find a way with less iterations
-- Tone down the `Chaos`, `Straight Priority` and `Near Obstacle Priority` values, those make it harder to find a way
+### 2단계: 병렬 초기 경로 탐색
+- 모든 파이프가 동시에 초기 경로 탐색
+- 각 파이프는 독립적인 스레드에서 처리
+- 장애물 데이터는 스레드 안전하게 공유
+
+### 3단계: 순서 기반 최적화
+- 추가된 순서대로 파이프를 순차 처리
+- 이전 파이프의 경로를 고려한 최적화
+- 충돌 회피 및 경로 개선
+
+## 🎨 시각화
+
+### 자동 시각화
+- `OnDrawGizmosSelected()`: Scene 뷰에서 경로와 탐지 범위 표시
+- 성공한 경로: 초록색 선
+- 충돌이 있는 경로: 빨간색 선
+
+### 수동 시각화
+```csharp
+// 특정 파이프 경로 시각화
+pipeExample.VisualizePipePath(pipeId);
+
+// 모든 경로 시각화
+pipeExample.VisualizeAllPaths();
+
+// 시각화 제거
+pipeExample.ClearVisualization();
+```
+
+## 🚨 주의사항
+
+1. **Unity Physics API**: 멀티스레딩 환경에서는 Physics API를 사용하지 않습니다
+2. **메인 스레드**: 초기 장애물 데이터 수집은 반드시 메인 스레드에서 실행
+3. **메모리 관리**: 대량의 파이프 처리 시 메모리 사용량 모니터링 필요
+4. **성능**: `maxConcurrentTasks` 값을 시스템 성능에 맞게 조정
+
+## 🔧 문제 해결
+
+### 경로를 찾지 못하는 경우
+- `GridSize` 값을 줄여보세요
+- `MaxIterations` 값을 늘려보세요
+- `obstacleAvoidanceMargin` 값을 조정해보세요
+
+### 성능이 느린 경우
+- `maxConcurrentTasks` 값을 늘려보세요
+- `detectionRange` 값을 줄여보세요
+- 불필요한 디버그 로그를 비활성화하세요
+
+### 메모리 사용량이 높은 경우
+- 처리 후 `ClearAllResults()` 호출
+- `detectionRange`를 적절히 제한
+- 필요 없는 장애물 레이어 제외
+
+## 📄 라이선스
+
+이 프로젝트는 MIT 라이선스 하에 배포됩니다.

@@ -88,9 +88,8 @@ namespace InstantPipes
         /// <param name="endPoint">끝점</param>
         /// <param name="endNormal">끝점 법선</param>
         /// <param name="radius">파이프 반지름</param>
-        /// <param name="priority">우선순위 (낮을수록 높은 우선순위)</param>
         public void AddPipeRequest(int pipeId, Vector3 startPoint, Vector3 startNormal, 
-                                  Vector3 endPoint, Vector3 endNormal, float radius, int priority = 0)
+                                  Vector3 endPoint, Vector3 endNormal, float radius)
         {
             if (!isInitialized)
             {
@@ -98,17 +97,17 @@ namespace InstantPipes
                 return;
             }
             
-            var request = new PathRequest(pipeId, startPoint, startNormal, endPoint, endNormal, radius, priority);
+            var request = new PathRequest(pipeId, startPoint, startNormal, endPoint, endNormal, radius);
             pathFinder.AddRequest(request);
             
             if (enableDebugLogs)
-                Debug.Log($"[파이프 매니저] 파이프 요청 추가 - ID: {pipeId}, 우선순위: {priority}");
+                Debug.Log($"[파이프 매니저] 파이프 요청 추가 - ID: {pipeId}");
         }
         
         /// <summary>
         /// 모든 파이프의 경로를 탐색합니다.
         /// 1단계: 모든 파이프가 동시에 초기 경로 탐색
-        /// 2단계: 우선순위 순서대로 최적화된 경로 탐색
+        /// 2단계: 추가된 순서대로 순차 경로 탐색
         /// </summary>
         public async Task ProcessAllPipesAsync()
         {
@@ -126,7 +125,7 @@ namespace InstantPipes
                 // 1단계: 모든 파이프가 동시에 초기 경로 탐색
                 await pathFinder.ProcessInitialPathsAsync();
                 
-                // 2단계: 우선순위 순서대로 순차 경로 탐색
+                // 2단계: 추가된 순서대로 순차 경로 탐색
                 await pathFinder.ProcessPriorityPathsAsync();
                 
                 if (enableDebugLogs)
@@ -197,9 +196,9 @@ namespace InstantPipes
             await InitializeAsync();
             
             // 파이프 요청들 추가
-            AddPipeRequest(0, new Vector3(0, 0, 0), Vector3.up, new Vector3(10, 5, 0), Vector3.down, 1f, priority: 1);
-            AddPipeRequest(1, new Vector3(5, 0, 5), Vector3.up, new Vector3(15, 5, 5), Vector3.down, 1.5f, priority: 0); // 높은 우선순위
-            AddPipeRequest(2, new Vector3(-5, 0, -5), Vector3.up, new Vector3(5, 5, -5), Vector3.down, 0.8f, priority: 2);
+            AddPipeRequest(0, new Vector3(0, 0, 0), Vector3.up, new Vector3(10, 5, 0), Vector3.down, 1f);
+            AddPipeRequest(1, new Vector3(5, 0, 5), Vector3.up, new Vector3(15, 5, 5), Vector3.down, 1.5f);
+            AddPipeRequest(2, new Vector3(-5, 0, -5), Vector3.up, new Vector3(5, 5, -5), Vector3.down, 0.8f);
             
             // 모든 파이프 처리
             await ProcessAllPipesAsync();

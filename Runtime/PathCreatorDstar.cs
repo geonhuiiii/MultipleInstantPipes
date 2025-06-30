@@ -4,6 +4,7 @@ using System;
 using System.Threading.Tasks;
 using System.Threading;
 using System.Collections.Concurrent;
+using System.Linq;
 namespace InstantPipes
 {
     // 파이프 경로 요청 정보
@@ -16,9 +17,8 @@ namespace InstantPipes
         public Vector3 endPoint;
         public Vector3 endNormal;
         public float pipeRadius;
-        public int priority; // 우선순위 (낮을수록 높은 우선순위)
         
-        public PathRequest(int id, Vector3 start, Vector3 startNorm, Vector3 end, Vector3 endNorm, float radius, int prio = 0)
+        public PathRequest(int id, Vector3 start, Vector3 startNorm, Vector3 end, Vector3 endNorm, float radius)
         {
             pipeId = id;
             startPoint = start;
@@ -26,7 +26,6 @@ namespace InstantPipes
             endPoint = end;
             endNormal = endNorm;
             pipeRadius = radius;
-            priority = prio;
         }
     }
 
@@ -56,6 +55,8 @@ namespace InstantPipes
         private readonly SemaphoreSlim semaphore;
         private readonly Dictionary<Vector3, bool> sharedObstacleData = new();
         private readonly object obstacleDataLock = new object();
+        private readonly List<PathRequest> allRequests = new(); // 모든 요청을 순서대로 저장
+        private readonly object requestsLock = new object();
         private bool isInitialized = false;
         
         public MultiThreadPathFinder(int maxConcurrentTasks = 4)
@@ -109,6 +110,12 @@ namespace InstantPipes
         public void AddRequest(PathRequest request)
         {
             pendingRequests.Enqueue(request);
+            
+            // 순서 보장을 위해 별도 리스트에도 저장
+            lock (requestsLock)
+            {
+                allRequests.Add(request);
+            }
         }
         
         // 모든 요청에 대해 초기 경로 탐색 (병렬)
@@ -135,32 +142,33 @@ namespace InstantPipes
             Debug.Log("[멀티스레딩] 초기 경로 탐색 완료");
         }
         
-        // 우선순위 순으로 순차 경로 탐색
+        // 순서대로 순차 경로 탐색
         public async Task ProcessPriorityPathsAsync()
         {
-            var sortedRequests = new List<PathRequest>();
+            List<PathRequest> orderedRequests;
             
-            // 완료된 결과를 다시 요청으로 변환 (우선순위 정렬용)
-            foreach (var result in completedResults.Values)
+            // 추가된 순서대로 요청 가져오기
+            lock (requestsLock)
             {
-                if (result.success) continue; // 이미 성공한 경로는 재처리하지 않음
+                orderedRequests = new List<PathRequest>(allRequests);
+            }
+            
+            Debug.Log($"[멀티스레딩] 순차 경로 탐색 시작: {orderedRequests.Count}개 파이프 (순서대로)");
+            
+            // 순서대로 처리 (실패한 파이프 또는 추가 최적화가 필요한 경우)
+            foreach (var request in orderedRequests)
+            {
+                var existingResult = completedResults.GetValueOrDefault(request.pipeId);
                 
-                // 실패한 요청을 다시 처리하기 위해 원래 요청 정보가 필요
-                // 여기서는 간단히 기존 결과를 이용
+                // 실패했거나 추가 최적화가 필요한 경우 재처리
+                if (existingResult == null || !existingResult.success)
+                {
+                    Debug.Log($"[멀티스레딩] 파이프 {request.pipeId} 순차 최적화 처리");
+                    await ProcessSingleRequestAsync(request, isInitialPass: false);
+                }
             }
             
-            // 우선순위 순으로 정렬
-            sortedRequests.Sort((a, b) => a.priority.CompareTo(b.priority));
-            
-            Debug.Log($"[멀티스레딩] 우선순위 기반 경로 탐색 시작: {sortedRequests.Count}개 파이프");
-            
-            // 순차적으로 처리
-            foreach (var request in sortedRequests)
-            {
-                await ProcessSingleRequestAsync(request, isInitialPass: false);
-            }
-            
-            Debug.Log("[멀티스레딩] 우선순위 기반 경로 탐색 완료");
+            Debug.Log("[멀티스레딩] 순차 경로 탐색 완료");
         }
         
         private async Task ProcessSingleRequestAsync(PathRequest request, bool isInitialPass)
@@ -215,6 +223,12 @@ namespace InstantPipes
         public void ClearResults()
         {
             completedResults.Clear();
+            
+            // 요청 리스트도 함께 지우기
+            lock (requestsLock)
+            {
+                allRequests.Clear();
+            }
         }
         
         private static Vector3 SnapToGrid(Vector3 pos, float gridSize)
