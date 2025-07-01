@@ -81,6 +81,53 @@ namespace InstantPipes
         public List<Material> PipeMaterials = new List<Material>();
         public List<float> PipeRadiuses = new List<float>();
 
+        [Header("Performance & Safety Settings")]
+        [Tooltip("무한반복 방지를 위한 보수적 설정 사용")]
+        public bool useSafeMode = true;
+        
+        [Tooltip("테스트용 초간단 설정 (매우 빠르지만 품질 낮음)")]
+        public bool useTestMode = false;
+        
+        // 현재 경로 생성 상태 추적
+        private bool isGeneratingPaths = false;
+        private System.DateTime pathGenerationStartTime;
+        
+        /// <summary>
+        /// 현재 경로 생성이 진행 중인지 확인
+        /// </summary>
+        public bool IsGeneratingPaths => isGeneratingPaths;
+        
+        /// <summary>
+        /// 경로 생성을 강제로 중단 (무한반복 발생 시 사용)
+        /// </summary>
+        public void ForceStopPathGeneration()
+        {
+            isGeneratingPaths = false;
+            Debug.LogWarning("[PipeGenerator] 경로 생성이 강제로 중단되었습니다.");
+        }
+        
+        /// <summary>
+        /// 성능 설정 가져오기 (모드에 따라 다른 설정 반환)
+        /// </summary>
+        private (int maxIterations, int timeoutSeconds, int maxNodesPerAxis, int maxTotalNodes) GetPerformanceSettings()
+        {
+            if (useTestMode)
+            {
+                // 테스트 모드: 매우 빠르지만 품질 낮음
+                return (50, 2, 10, 500);
+            }
+            else if (useSafeMode)
+            {
+                // 안전 모드: 보수적 설정
+                return (Mathf.Min(MaxIterations, 300), 5, 30, 3000);
+            }
+            else
+            {
+                // 일반 모드: 기존 설정
+                return (MaxIterations, 10, 50, 10000);
+            }
+        }
+
         private void OnEnable()
         {
             _renderer = GetComponent<Renderer>();
@@ -344,6 +391,11 @@ namespace InstantPipes
 
         public bool AddPipe(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius = -1, Material material = null)
         {
+            isGeneratingPaths = true;
+            pathGenerationStartTime = System.DateTime.Now;
+            
+            try
+            {
             int newPipeIndex = Pipes.Count;
             
             // 파이프 반경 설정
@@ -435,7 +487,14 @@ namespace InstantPipes
                 pathCreator.Chaos = Chaos;
                 pathCreator.StraightPathPriority = StraightPathPriority;
                 pathCreator.NearObstaclesPriority = NearObstaclesPriority;
-                pathCreator.MaxIterations = MaxIterations;
+                
+                // 성능 설정 적용
+                var (maxIterations, timeoutSeconds, maxNodesPerAxis, maxTotalNodes) = GetPerformanceSettings();
+                pathCreator.MaxIterations = maxIterations;
+                pathCreator.SetPerformanceSettings(maxIterations, timeoutSeconds, maxNodesPerAxis, maxTotalNodes);
+                pathCreator.SetDebugSettings(false);
+                
+                Debug.Log($"[AddPipe] 단일 파이프 생성 시작 - 모드: {(useTestMode ? "테스트" : useSafeMode ? "안전" : "일반")}, 설정: {maxIterations}회/{timeoutSeconds}초");
                 
                 // 경로 생성
                 bool succ = false;
@@ -462,6 +521,9 @@ namespace InstantPipes
             }
             finally
             {
+                isGeneratingPaths = false;
+                var elapsedTime = (System.DateTime.Now - pathGenerationStartTime).TotalSeconds;
+                Debug.Log($"[AddPipe] 단일 파이프 생성 완료 - 경과시간: {elapsedTime:F2}초");
             }
         }
 
@@ -519,6 +581,11 @@ namespace InstantPipes
 
         public bool RegeneratePaths()
         {
+            isGeneratingPaths = true;
+            pathGenerationStartTime = System.DateTime.Now;
+            
+            try
+            {
             var pipeInfos = new List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius)>();
             var originalPipes = new List<Pipe>(Pipes);
             
@@ -557,6 +624,12 @@ namespace InstantPipes
                     temporaryColliders.Add(CreateTemporaryCollider(info.startPoint, info.startNormal));
                     temporaryColliders.Add(CreateTemporaryCollider(info.endPoint, info.endNormal));
                 }
+                
+                // 성능 설정 가져오기
+                var (maxIterations, timeoutSeconds, maxNodesPerAxis, maxTotalNodes) = GetPerformanceSettings();
+                
+                Debug.Log($"[RegeneratePaths] 경로 재생성 시작 - 파이프 수: {pipeInfos.Count}, 모드: {(useTestMode ? "테스트" : useSafeMode ? "안전" : "일반")}, 설정: {maxIterations}회/{timeoutSeconds}초");
+                
                 bool succ = false;
                 // PathCreatorDstar로 모든 경로 재생성
                 foreach (var config in pipeInfos){
@@ -568,7 +641,11 @@ namespace InstantPipes
                     pathCreator.Chaos = Chaos;
                     pathCreator.StraightPathPriority = StraightPathPriority;
                     pathCreator.NearObstaclesPriority = NearObstaclesPriority;
-                    pathCreator.MaxIterations = MaxIterations;
+                    pathCreator.MaxIterations = maxIterations;
+                    
+                    // 성능 설정 적용
+                    pathCreator.SetPerformanceSettings(maxIterations, timeoutSeconds, maxNodesPerAxis, maxTotalNodes);
+                    pathCreator.SetDebugSettings(false);
                     
                     // 경로 생성
                     var path = pathCreator.Create(config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius);
@@ -604,6 +681,13 @@ namespace InstantPipes
                 {
                     if (collider != null) UnityEngine.Object.DestroyImmediate(collider);
                 }
+            }
+            }
+            finally
+            {
+                isGeneratingPaths = false;
+                var elapsedTime = (System.DateTime.Now - pathGenerationStartTime).TotalSeconds;
+                Debug.Log($"[RegeneratePaths] 경로 재생성 완료 - 경과시간: {elapsedTime:F2}초");
             }
         }
 
@@ -754,6 +838,11 @@ namespace InstantPipes
         // 다중 파이프 생성 메서드 (파이프 간 충돌 방지)
         public async System.Threading.Tasks.Task<float> AddMultiplePipesAsync(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
         {
+            isGeneratingPaths = true;
+            pathGenerationStartTime = System.DateTime.Now;
+            
+            try
+            {
             float totalPathLength = 0f;
             
             if (pipeConfigs == null || pipeConfigs.Count == 0)
@@ -778,13 +867,11 @@ namespace InstantPipes
                 // MultiThreadPathFinder 인스턴스 생성
                 var pathFinder = new MultiThreadPathFinder(maxConcurrentTasks: 4);
                 
-                // 성능 설정 전달
-                pathFinder.SetPerformanceSettings(
-                    MaxIterations,
-                    30, // 30초 타임아웃
-                    100, // 축당 최대 노드 수
-                    50000 // 총 최대 노드 수
-                );
+                // 성능 설정 가져오기 및 적용
+                var (maxIterations, timeoutSeconds, maxNodesPerAxis, maxTotalNodes) = GetPerformanceSettings();
+                pathFinder.SetPerformanceSettings(maxIterations, timeoutSeconds, maxNodesPerAxis, maxTotalNodes);
+                
+                Debug.Log($"[PipeGenerator] 다중 파이프 성능 설정 - 모드: {(useTestMode ? "테스트" : useSafeMode ? "안전" : "일반")}, 설정: {maxIterations}회/{timeoutSeconds}초");
                 
                 // 동적 그리드 범위 계산
                 var (gridCenter, searchRange) = CalculateOptimalGridBounds(pipeConfigs);
@@ -912,6 +999,13 @@ namespace InstantPipes
                     if (collider != null) UnityEngine.Object.DestroyImmediate(collider);
                 }
             }
+            }
+            finally
+            {
+                isGeneratingPaths = false;
+                var elapsedTime = (System.DateTime.Now - pathGenerationStartTime).TotalSeconds;
+                Debug.Log($"[AddMultiplePipesAsync] 다중 파이프 생성 완료 - 경과시간: {elapsedTime:F2}초");
+            }
         }
         
         // 기존 동기 버전 (호환성 유지)
@@ -932,6 +1026,11 @@ namespace InstantPipes
         // 동기적 다중 파이프 생성 (Unity 메인 스레드 안전)
         private float AddMultiplePipesSync(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
         {
+            isGeneratingPaths = true;
+            pathGenerationStartTime = System.DateTime.Now;
+            
+            try
+            {
             float totalPathLength = 0f;
             
             if (pipeConfigs == null || pipeConfigs.Count == 0)
@@ -956,13 +1055,11 @@ namespace InstantPipes
                 // MultiThreadPathFinder 인스턴스 생성
                 var pathFinder = new MultiThreadPathFinder(maxConcurrentTasks: 1); // 동기 처리를 위해 1개만 사용
                 
-                // 성능 설정 전달
-                pathFinder.SetPerformanceSettings(
-                    MaxIterations,
-                    30, // 30초 타임아웃
-                    100, // 축당 최대 노드 수
-                    50000 // 총 최대 노드 수
-                );
+                // 성능 설정 가져오기 및 적용
+                var (maxIterations, timeoutSeconds, maxNodesPerAxis, maxTotalNodes) = GetPerformanceSettings();
+                pathFinder.SetPerformanceSettings(maxIterations, timeoutSeconds, maxNodesPerAxis, maxTotalNodes);
+                
+                Debug.Log($"[PipeGenerator] 다중 파이프 성능 설정 (동기) - 모드: {(useTestMode ? "테스트" : useSafeMode ? "안전" : "일반")}, 설정: {maxIterations}회/{timeoutSeconds}초");
                 
                 // 동적 그리드 범위 계산
                 var (gridCenter, searchRange) = CalculateOptimalGridBounds(pipeConfigs);
@@ -1099,6 +1196,13 @@ namespace InstantPipes
                 {
                     if (collider != null) UnityEngine.Object.DestroyImmediate(collider);
                 }
+            }
+            }
+            finally
+            {
+                isGeneratingPaths = false;
+                var elapsedTime = (System.DateTime.Now - pathGenerationStartTime).TotalSeconds;
+                Debug.Log($"[AddMultiplePipesSync] 다중 파이프 생성 완료 (동기) - 경과시간: {elapsedTime:F2}초");
             }
         }
 

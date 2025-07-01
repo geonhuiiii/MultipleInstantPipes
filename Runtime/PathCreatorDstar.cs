@@ -796,43 +796,80 @@ namespace InstantPipes
             // 그리드 크기 제한 (성능 및 메모리 보호)
             Vector3 gridSize = gridMaxBounds - gridMinBounds;
             
+            // 무한반복 방지를 위한 더 엄격한 제한
+            int maxSafeNodesPerAxis = Mathf.Min(customMaxNodesPerAxis, 30); // 축당 최대 30개로 제한
+            int maxSafeTotalNodes = Mathf.Min(customMaxTotalNodes, 5000); // 총 최대 5000개로 제한
+            
+            Debug.Log($"[그리드] 노드 생성 시작 - 안전 제한: 축당 {maxSafeNodesPerAxis}, 총 {maxSafeTotalNodes}개");
+            
             // 그리드가 너무 클 경우 범위 축소
-            if (gridSize.x / GridSize > customMaxNodesPerAxis)
+            if (gridSize.x / GridSize > maxSafeNodesPerAxis)
             {
                 float center = (gridMinBounds.x + gridMaxBounds.x) * 0.5f;
-                float halfRange = customMaxNodesPerAxis * GridSize * 0.5f;
+                float halfRange = maxSafeNodesPerAxis * GridSize * 0.5f;
                 gridMinBounds.x = center - halfRange;
                 gridMaxBounds.x = center + halfRange;
                 Debug.LogWarning($"[그리드] X축 범위가 너무 커서 축소: {gridMinBounds.x} ~ {gridMaxBounds.x}");
             }
             
-            if (gridSize.y / GridSize > customMaxNodesPerAxis)
+            if (gridSize.y / GridSize > maxSafeNodesPerAxis)
             {
                 float center = (gridMinBounds.y + gridMaxBounds.y) * 0.5f;
-                float halfRange = customMaxNodesPerAxis * GridSize * 0.5f;
+                float halfRange = maxSafeNodesPerAxis * GridSize * 0.5f;
                 gridMinBounds.y = center - halfRange;
                 gridMaxBounds.y = center + halfRange;
                 Debug.LogWarning($"[그리드] Y축 범위가 너무 커서 축소: {gridMinBounds.y} ~ {gridMaxBounds.y}");
             }
             
-            if (gridSize.z / GridSize > customMaxNodesPerAxis)
+            if (gridSize.z / GridSize > maxSafeNodesPerAxis)
             {
                 float center = (gridMinBounds.z + gridMaxBounds.z) * 0.5f;
-                float halfRange = customMaxNodesPerAxis * GridSize * 0.5f;
+                float halfRange = maxSafeNodesPerAxis * GridSize * 0.5f;
                 gridMinBounds.z = center - halfRange;
                 gridMaxBounds.z = center + halfRange;
                 Debug.LogWarning($"[그리드] Z축 범위가 너무 커서 축소: {gridMinBounds.z} ~ {gridMaxBounds.z}");
             }
             
-            // 안전한 그리드 생성
+            // 안전한 그리드 생성 (더 엄격한 제한)
             int nodeCount = 0;
+            int xSteps = 0, ySteps = 0, zSteps = 0;
+            var startTime = System.DateTime.Now;
             
-            for (float x = gridMinBounds.x; x <= gridMaxBounds.x && nodeCount < customMaxTotalNodes; x += GridSize)
+            for (float x = gridMinBounds.x; x <= gridMaxBounds.x && nodeCount < maxSafeTotalNodes; x += GridSize)
             {
-                for (float y = gridMinBounds.y; y <= gridMaxBounds.y && nodeCount < customMaxTotalNodes; y += GridSize)
+                xSteps++;
+                ySteps = 0;
+                
+                // X축 단계 제한 체크
+                if (xSteps > maxSafeNodesPerAxis)
                 {
-                    for (float z = gridMinBounds.z; z <= gridMaxBounds.z && nodeCount < customMaxTotalNodes; z += GridSize)
+                    Debug.LogWarning($"[그리드] X축 단계 제한 도달: {xSteps}");
+                    break;
+                }
+                
+                for (float y = gridMinBounds.y; y <= gridMaxBounds.y && nodeCount < maxSafeTotalNodes; y += GridSize)
+                {
+                    ySteps++;
+                    zSteps = 0;
+                    
+                    // Y축 단계 제한 체크
+                    if (ySteps > maxSafeNodesPerAxis)
                     {
+                        Debug.LogWarning($"[그리드] Y축 단계 제한 도달: {ySteps}");
+                        break;
+                    }
+                    
+                    for (float z = gridMinBounds.z; z <= gridMaxBounds.z && nodeCount < maxSafeTotalNodes; z += GridSize)
+                    {
+                        zSteps++;
+                        
+                        // Z축 단계 제한 체크
+                        if (zSteps > maxSafeNodesPerAxis)
+                        {
+                            Debug.LogWarning($"[그리드] Z축 단계 제한 도달: {zSteps}");
+                            break;
+                        }
+                        
                         Vector3 pos = SnapToGrid(new Vector3(x, y, z), GridSize);
                         if (!nodes.ContainsKey(pos))
                         {
@@ -840,20 +877,37 @@ namespace InstantPipes
                             nodeCount++;
                         }
                         
-                        // 안전장치: 너무 많은 노드 생성 방지
-                        if (nodeCount >= customMaxTotalNodes)
+                        // 1000개마다 진행 상황 체크
+                        if (nodeCount % 1000 == 0 && nodeCount > 0)
                         {
-                            Debug.LogWarning($"[그리드] 최대 노드 수 도달로 생성 중단: {customMaxTotalNodes}개");
+                            var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
+                            Debug.Log($"[그리드] 노드 생성 진행 중: {nodeCount}/{maxSafeTotalNodes}개, 경과시간: {elapsedTime:F2}초");
+                            
+                            // 노드 생성이 너무 오래 걸리면 중단
+                            if (elapsedTime > 2.0) // 2초 제한
+                            {
+                                Debug.LogError($"[그리드] 노드 생성 타임아웃 - 2초 초과");
+                                break;
+                            }
+                        }
+                        
+                        // 안전장치: 너무 많은 노드 생성 방지
+                        if (nodeCount >= maxSafeTotalNodes)
+                        {
+                            Debug.LogWarning($"[그리드] 최대 노드 수 도달로 생성 중단: {maxSafeTotalNodes}개");
                             break;
                         }
                     }
                 }
             }
             
-            // 경고가 필요한 경우에만 로그 출력
-            if (nodeCount > 50000)
+            var totalTime = (System.DateTime.Now - startTime).TotalSeconds;
+            Debug.Log($"[그리드] 노드 생성 완료: {nodeCount}개 (시간: {totalTime:F2}초, 범위: {gridMinBounds} ~ {gridMaxBounds})");
+            
+            // 경고가 필요한 경우에만 추가 로그 출력
+            if (nodeCount > 2000)
             {
-                Debug.LogWarning($"[그리드] 대용량 노드 생성: {nodeCount}개 (범위: {gridMinBounds} ~ {gridMaxBounds})");
+                Debug.LogWarning($"[그리드] 대용량 노드 생성됨: {nodeCount}개 - 성능에 영향을 줄 수 있음");
             }
         }
         
@@ -943,18 +997,31 @@ namespace InstantPipes
             var iteration = 0;
             var startTime = System.DateTime.Now;
             
-            while (openList.Count > 0 && iteration < MaxIterations)
+            // 무한루프 방지를 위한 더 엄격한 설정
+            int maxSafeIterations = Mathf.Min(MaxIterations, customMaxIterations);
+            double maxSafeTimeoutSeconds = Math.Min(customMaxTimeoutSeconds, 5.0); // 최대 5초로 제한
+            
+            Debug.Log($"[DStar] 경로 탐색 시작 - 최대 반복: {maxSafeIterations}, 타임아웃: {maxSafeTimeoutSeconds}초");
+            
+            while (openList.Count > 0 && iteration < maxSafeIterations)
             {
-                // 타임아웃 체크 (100번마다)
-                if (iteration % 100 == 0)
+                // 매 10번마다 타임아웃 체크 (더 자주 체크)
+                if (iteration % 10 == 0)
                 {
                     var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
-                    if (elapsedTime > customMaxTimeoutSeconds)
+                    if (elapsedTime > maxSafeTimeoutSeconds)
                     {
-                        Debug.LogError($"[DStar] 타임아웃 발생 ({customMaxTimeoutSeconds}초) - 반복: {iteration}");
+                        Debug.LogError($"[DStar] 타임아웃 발생 ({maxSafeTimeoutSeconds}초) - 반복: {iteration}");
                         LastPathSuccess = false;
                         break;
                     }
+                }
+                
+                // 100번마다 진행 상황 로그
+                if (iteration % 100 == 0 && iteration > 0)
+                {
+                    var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
+                    Debug.Log($"[DStar] 진행 중... 반복: {iteration}/{maxSafeIterations}, 경과시간: {elapsedTime:F2}초, OpenList: {openList.Count}");
                 }
                 
                 var currentKey = openList.Peek();
@@ -965,10 +1032,19 @@ namespace InstantPipes
                 if ((CompareKey(currentKey, startKey) >= 0) && 
                     (Mathf.Abs(startNode.g - startNode.rhs) < 0.001f))
                 {
+                    Debug.Log($"[DStar] 정상 종료 - 반복: {iteration}, 시간: {(System.DateTime.Now - startTime).TotalSeconds:F2}초");
                     break;
                 }
                 
                 iteration++;
+                
+                // OpenList가 비정상적으로 클 경우 조기 종료
+                if (openList.Count > 10000)
+                {
+                    Debug.LogError($"[DStar] OpenList가 너무 큼 ({openList.Count}) - 조기 종료");
+                    LastPathSuccess = false;
+                    break;
+                }
                 
                 var u = openList.Dequeue();
                 var uPos = u.position;
@@ -990,9 +1066,9 @@ namespace InstantPipes
             
             var totalTime = (System.DateTime.Now - startTime).TotalSeconds;
             
-            if (iteration >= MaxIterations)
+            if (iteration >= maxSafeIterations)
             {
-                Debug.LogError($"[DStar] 최대 반복 횟수 도달: {MaxIterations}, 시간: {totalTime:F2}초");
+                Debug.LogError($"[DStar] 최대 반복 횟수 도달: {maxSafeIterations}, 시간: {totalTime:F2}초");
                 LastPathSuccess = false;
             }
             else if (openList.Count == 0)
@@ -1005,22 +1081,44 @@ namespace InstantPipes
         {
             List<Vector3> path = new();
             Vector3 current = start;
-            int maxPathSteps = 10000;
+            
+            // 무한루프 방지를 위한 더 엄격한 설정
+            int maxPathSteps = Mathf.Min(10000, customMaxTotalNodes / 10); // 더 작은 값 사용
             int steps = 0;
             var startTime = System.DateTime.Now;
+            double maxTimeoutSeconds = 3.0; // 3초로 제한
+            
+            HashSet<Vector3> visitedNodes = new(); // 중복 방문 방지
+            
+            Debug.Log($"[GetPath] 경로 구성 시작 - 최대 단계: {maxPathSteps}, 타임아웃: {maxTimeoutSeconds}초");
             
             while (!AreEqual(current, goal) && steps < maxPathSteps)
             {
-                // 타임아웃 체크 (1000번마다)
-                if (steps % 1000 == 0 && steps > 0)
+                // 매 100번마다 타임아웃 체크
+                if (steps % 100 == 0)
                 {
                     var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
-                    if (elapsedTime > 10)
+                    if (elapsedTime > maxTimeoutSeconds)
                     {
-                        Debug.LogError($"[GetPath] 타임아웃 발생 (10초) - 단계: {steps}");
+                        Debug.LogError($"[GetPath] 타임아웃 발생 ({maxTimeoutSeconds}초) - 단계: {steps}");
                         return null;
                     }
                 }
+                
+                // 1000번마다 진행 상황 로그
+                if (steps % 1000 == 0 && steps > 0)
+                {
+                    var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
+                    Debug.Log($"[GetPath] 진행 중... 단계: {steps}/{maxPathSteps}, 경과시간: {elapsedTime:F2}초");
+                }
+                
+                // 중복 방문 체크 (무한루프 방지)
+                if (visitedNodes.Contains(current))
+                {
+                    Debug.LogError($"[GetPath] 중복 방문 감지 - 무한루프 방지를 위해 종료: {current}");
+                    return null;
+                }
+                visitedNodes.Add(current);
                 
                 float min = Mathf.Infinity;
                 Vector3 next = current;
@@ -1040,12 +1138,20 @@ namespace InstantPipes
 
                 if (!foundValidNeighbor || min == Mathf.Infinity || AreEqual(next, current))
                 {
+                    Debug.LogWarning($"[GetPath] 유효한 다음 노드를 찾지 못함 - 단계: {steps}");
                     return null; // No path
                 }
 
                 current = next;
                 path.Add(current);
                 steps++;
+                
+                // 방문한 노드가 너무 많아지면 메모리 보호
+                if (visitedNodes.Count > 5000)
+                {
+                    Debug.LogError($"[GetPath] 방문 노드 수가 너무 많음 ({visitedNodes.Count}) - 조기 종료");
+                    return null;
+                }
             }
             
             var totalTime = (System.DateTime.Now - startTime).TotalSeconds;
@@ -1055,7 +1161,8 @@ namespace InstantPipes
                 Debug.LogError($"[GetPath] 최대 단계 수 도달: {maxPathSteps}, 시간: {totalTime:F2}초");
                 return null;
             }
-
+            
+            Debug.Log($"[GetPath] 경로 구성 완료 - 단계: {steps}, 시간: {totalTime:F2}초, 포인트: {path.Count}개");
             return path;
         }
 
