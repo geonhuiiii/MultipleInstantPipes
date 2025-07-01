@@ -45,6 +45,26 @@ namespace InstantPipes
         public float NearObstaclesPriority = 0f;
         public int MaxIterations = 1000;
         public int MinDistanceBetweenBends = 3;
+        
+        [Header("Dynamic Grid Settings")]
+        [Tooltip("자동으로 그리드 범위를 계산할지 여부")]
+        public bool useAutomaticGridBounds = true;
+        
+        [Tooltip("수동 그리드 범위 (useAutomaticGridBounds가 false일 때 사용)")]
+        public Vector3 manualGridCenter = Vector3.zero;
+        public Vector3 manualGridSize = new Vector3(100f, 50f, 100f);
+        
+        [Tooltip("자동 그리드 범위의 여백 (파이프 범위에 추가되는 크기)")]
+        public float gridPadding = 20f;
+        
+        [Tooltip("최소 그리드 크기 (각 축별)")]
+        public Vector3 minGridSize = new Vector3(20f, 10f, 20f);
+        
+        [Tooltip("최대 그리드 크기 (각 축별, 성능 제한용)")]
+        public Vector3 maxGridSize = new Vector3(500f, 100f, 500f);
+        
+        [Tooltip("장애물 검색 범위 (그리드 크기에 따라 자동 조정)")]
+        public float obstacleSearchRangeMultiplier = 1.5f;
 
         private Renderer _renderer;
         private MeshCollider _collider;
@@ -768,13 +788,15 @@ namespace InstantPipes
                     50000 // 총 최대 노드 수
                 );
                 
-                // 장애물 데이터 초기화 (메인 스레드에서)
-                Vector3 center = Vector3.zero;
-                if (pipeConfigs.Count > 0)
-                {
-                    center = (pipeConfigs[0].startPoint + pipeConfigs[0].endPoint) * 0.5f;
-                }
-                pathFinder.InitializeObstacleData(center, 1000f, -1, GridSize);
+                // 동적 그리드 범위 계산
+                var (gridCenter, searchRange) = CalculateOptimalGridBounds(pipeConfigs);
+                var (validatedCenter, validatedRange) = ValidateAndClampGridBounds(gridCenter, searchRange);
+                
+                Debug.Log($"[PipeGenerator] 그리드 설정 - {GetGridInfoString()}");
+                Debug.Log($"[PipeGenerator] 계산된 그리드 - 중심: {validatedCenter}, 검색범위: {validatedRange}");
+                
+                // 장애물 데이터 초기화 (동적 범위 사용)
+                pathFinder.InitializeObstacleData(validatedCenter, validatedRange, -1, GridSize);
                 
                 // 파이프 요청 생성 및 추가
                 for (int i = 0; i < pipeConfigs.Count; i++)
@@ -947,13 +969,15 @@ namespace InstantPipes
                     50000 // 총 최대 노드 수
                 );
                 
-                // 장애물 데이터 초기화
-                Vector3 center = Vector3.zero;
-                if (pipeConfigs.Count > 0)
-                {
-                    center = (pipeConfigs[0].startPoint + pipeConfigs[0].endPoint) * 0.5f;
-                }
-                pathFinder.InitializeObstacleData(center, 1000f, -1, GridSize);
+                // 동적 그리드 범위 계산
+                var (gridCenter, searchRange) = CalculateOptimalGridBounds(pipeConfigs);
+                var (validatedCenter, validatedRange) = ValidateAndClampGridBounds(gridCenter, searchRange);
+                
+                Debug.Log($"[PipeGenerator] 그리드 설정 (동기) - {GetGridInfoString()}");
+                Debug.Log($"[PipeGenerator] 계산된 그리드 (동기) - 중심: {validatedCenter}, 검색범위: {validatedRange}");
+                
+                // 장애물 데이터 초기화 (동적 범위 사용)
+                pathFinder.InitializeObstacleData(validatedCenter, validatedRange, -1, GridSize);
                 
                 // 파이프 요청 생성 및 추가
                 for (int i = 0; i < pipeConfigs.Count; i++)
@@ -1120,6 +1144,256 @@ namespace InstantPipes
             }
 
             return length;
+        }
+        
+        // 동적 그리드 범위 계산 메서드들
+        
+        /// <summary>
+        /// 파이프 설정에 따른 최적 그리드 범위 계산
+        /// </summary>
+        private (Vector3 center, float searchRange) CalculateOptimalGridBounds(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
+        {
+            if (pipeConfigs == null || pipeConfigs.Count == 0)
+            {
+                Debug.LogWarning("[PipeGenerator] 파이프 설정이 없어 기본 그리드 범위 사용");
+                return (Vector3.zero, 100f);
+            }
+            
+            if (!useAutomaticGridBounds)
+            {
+                // 수동 그리드 설정 사용
+                float searchRange = Mathf.Max(manualGridSize.x, manualGridSize.y, manualGridSize.z) * obstacleSearchRangeMultiplier;
+                Debug.Log($"[PipeGenerator] 수동 그리드 범위 사용 - 중심: {manualGridCenter}, 크기: {manualGridSize}, 검색범위: {searchRange}");
+                return (manualGridCenter, searchRange);
+            }
+            
+            // 자동 그리드 범위 계산
+            Vector3 minBounds = pipeConfigs[0].startPoint;
+            Vector3 maxBounds = pipeConfigs[0].startPoint;
+            
+            // 모든 파이프의 시작점과 끝점을 포함하는 바운딩 박스 계산
+            foreach (var config in pipeConfigs)
+            {
+                // 시작점과 끝점 포함
+                Vector3[] points = { config.startPoint, config.endPoint };
+                
+                foreach (var point in points)
+                {
+                    minBounds.x = Mathf.Min(minBounds.x, point.x);
+                    minBounds.y = Mathf.Min(minBounds.y, point.y);
+                    minBounds.z = Mathf.Min(minBounds.z, point.z);
+                    
+                    maxBounds.x = Mathf.Max(maxBounds.x, point.x);
+                    maxBounds.y = Mathf.Max(maxBounds.y, point.y);
+                    maxBounds.z = Mathf.Max(maxBounds.z, point.z);
+                }
+                
+                // Height를 고려한 실제 경로 시작/끝점도 포함
+                Vector3 pathStart = config.startPoint + config.startNormal.normalized * Height;
+                Vector3 pathEnd = config.endPoint + config.endNormal.normalized * Height;
+                
+                Vector3[] pathPoints = { pathStart, pathEnd };
+                foreach (var point in pathPoints)
+                {
+                    minBounds.x = Mathf.Min(minBounds.x, point.x);
+                    minBounds.y = Mathf.Min(minBounds.y, point.y);
+                    minBounds.z = Mathf.Min(minBounds.z, point.z);
+                    
+                    maxBounds.x = Mathf.Max(maxBounds.x, point.x);
+                    maxBounds.y = Mathf.Max(maxBounds.y, point.y);
+                    maxBounds.z = Mathf.Max(maxBounds.z, point.z);
+                }
+            }
+            
+            // 여백 추가
+            minBounds -= Vector3.one * gridPadding;
+            maxBounds += Vector3.one * gridPadding;
+            maxBounds.y += 10f; // Y축에 추가 여백
+            
+            // 최소 크기 보장
+            Vector3 currentSize = maxBounds - minBounds;
+            Vector3 center = (minBounds + maxBounds) * 0.5f;
+            
+            for (int i = 0; i < 3; i++)
+            {
+                if (currentSize[i] < minGridSize[i])
+                {
+                    float expansion = (minGridSize[i] - currentSize[i]) * 0.5f;
+                    minBounds[i] -= expansion;
+                    maxBounds[i] += expansion;
+                }
+            }
+            
+            // 최대 크기 제한
+            currentSize = maxBounds - minBounds;
+            for (int i = 0; i < 3; i++)
+            {
+                if (currentSize[i] > maxGridSize[i])
+                {
+                    float reduction = (currentSize[i] - maxGridSize[i]) * 0.5f;
+                    minBounds[i] += reduction;
+                    maxBounds[i] -= reduction;
+                    Debug.LogWarning($"[PipeGenerator] {(i == 0 ? "X" : i == 1 ? "Y" : "Z")}축 그리드 크기가 최대값으로 제한됨: {maxGridSize[i]}");
+                }
+            }
+            
+            // 최종 중심점과 검색 범위 계산
+            center = (minBounds + maxBounds) * 0.5f;
+            Vector3 finalSize = maxBounds - minBounds;
+            float searchRange = Mathf.Max(finalSize.x, finalSize.y, finalSize.z) * obstacleSearchRangeMultiplier;
+            
+            Debug.Log($"[PipeGenerator] 자동 그리드 범위 계산 완료 - 중심: {center}, 크기: {finalSize}, 검색범위: {searchRange}");
+            
+            return (center, searchRange);
+        }
+        
+        /// <summary>
+        /// 그리드 범위 검증 및 조정
+        /// </summary>
+        private (Vector3 center, float searchRange) ValidateAndClampGridBounds(Vector3 center, float searchRange)
+        {
+            // 검색 범위 제한 (성능 보호)
+            float maxSearchRange = Mathf.Max(maxGridSize.x, maxGridSize.y, maxGridSize.z) * obstacleSearchRangeMultiplier;
+            if (searchRange > maxSearchRange)
+            {
+                searchRange = maxSearchRange;
+                Debug.LogWarning($"[PipeGenerator] 검색 범위가 최대값으로 제한됨: {searchRange}");
+            }
+            
+            // 최소 검색 범위 보장
+            float minSearchRange = Mathf.Max(minGridSize.x, minGridSize.y, minGridSize.z);
+            if (searchRange < minSearchRange)
+            {
+                searchRange = minSearchRange;
+                Debug.Log($"[PipeGenerator] 검색 범위가 최소값으로 설정됨: {searchRange}");
+            }
+            
+            return (center, searchRange);
+        }
+        
+        /// <summary>
+        /// 현재 그리드 설정 정보를 반환 (디버깅용)
+        /// </summary>
+        public string GetGridInfoString()
+        {
+            if (useAutomaticGridBounds)
+            {
+                return $"자동 그리드 - 여백: {gridPadding}, 최소크기: {minGridSize}, 최대크기: {maxGridSize}";
+            }
+            else
+            {
+                return $"수동 그리드 - 중심: {manualGridCenter}, 크기: {manualGridSize}";
+            }
+        }
+        
+        /// <summary>
+        /// Unity Editor에서 그리드 범위 시각화
+        /// </summary>
+        private void OnDrawGizmosSelected()
+        {
+            if (!useAutomaticGridBounds)
+            {
+                // 수동 그리드 범위 시각화
+                Gizmos.color = Color.yellow;
+                Gizmos.DrawWireCube(manualGridCenter, manualGridSize);
+                
+                // 검색 범위 시각화
+                float searchRange = Mathf.Max(manualGridSize.x, manualGridSize.y, manualGridSize.z) * obstacleSearchRangeMultiplier;
+                Gizmos.color = Color.cyan * 0.3f;
+                Gizmos.DrawWireSphere(manualGridCenter, searchRange * 0.5f);
+            }
+            else if (Pipes != null && Pipes.Count > 0)
+            {
+                // 기존 파이프들로부터 자동 그리드 범위 계산 및 시각화
+                var pipeConfigs = new List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)>();
+                
+                for (int i = 0; i < Pipes.Count; i++)
+                {
+                    var pipe = Pipes[i];
+                    if (pipe.Points.Count >= 2)
+                    {
+                        Vector3 startPoint = pipe.Points[0];
+                        Vector3 startNormal = (pipe.Points[1] - pipe.Points[0]).normalized;
+                        
+                        int lastIdx = pipe.Points.Count - 1;
+                        Vector3 endPoint = pipe.Points[lastIdx];
+                        Vector3 endNormal = (pipe.Points[lastIdx-1] - pipe.Points[lastIdx]).normalized;
+                        
+                        float radius = i < PipeRadiuses.Count ? PipeRadiuses[i] : Radius;
+                        Material material = i < PipeMaterials.Count ? PipeMaterials[i] : null;
+                        
+                        pipeConfigs.Add((startPoint, startNormal, endPoint, endNormal, radius, material));
+                    }
+                }
+                
+                if (pipeConfigs.Count > 0)
+                {
+                    var (gridCenter, searchRange) = CalculateOptimalGridBounds(pipeConfigs);
+                    var (validatedCenter, validatedRange) = ValidateAndClampGridBounds(gridCenter, searchRange);
+                    
+                    // 자동 계산된 그리드 범위 시각화
+                    Gizmos.color = Color.green;
+                    Vector3 gridSize = Vector3.one * validatedRange;
+                    Gizmos.DrawWireCube(validatedCenter, gridSize);
+                    
+                    // 파이프 시작/끝점 시각화
+                    Gizmos.color = Color.red;
+                    foreach (var config in pipeConfigs)
+                    {
+                        Gizmos.DrawWireSphere(config.startPoint, 1f);
+                        Gizmos.DrawWireSphere(config.endPoint, 1f);
+                    }
+                }
+            }
+        }
+        
+        /// <summary>
+        /// 에디터에서 그리드 설정 테스트 (디버깅용)
+        /// </summary>
+        [System.Diagnostics.Conditional("UNITY_EDITOR")]
+        public void TestGridCalculation()
+        {
+            if (Pipes == null || Pipes.Count == 0)
+            {
+                Debug.LogWarning("[PipeGenerator] 테스트할 파이프가 없습니다.");
+                return;
+            }
+            
+            Debug.Log($"[PipeGenerator] 그리드 계산 테스트 시작");
+            Debug.Log($"[PipeGenerator] 현재 설정: {GetGridInfoString()}");
+            
+            // 기존 파이프들을 기반으로 테스트
+            var pipeConfigs = new List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)>();
+            
+            for (int i = 0; i < Pipes.Count; i++)
+            {
+                var pipe = Pipes[i];
+                if (pipe.Points.Count >= 2)
+                {
+                    Vector3 startPoint = pipe.Points[0];
+                    Vector3 startNormal = (pipe.Points[1] - pipe.Points[0]).normalized;
+                    
+                    int lastIdx = pipe.Points.Count - 1;
+                    Vector3 endPoint = pipe.Points[lastIdx];
+                    Vector3 endNormal = (pipe.Points[lastIdx-1] - pipe.Points[lastIdx]).normalized;
+                    
+                    float radius = i < PipeRadiuses.Count ? PipeRadiuses[i] : Radius;
+                    Material material = i < PipeMaterials.Count ? PipeMaterials[i] : null;
+                    
+                    pipeConfigs.Add((startPoint, startNormal, endPoint, endNormal, radius, material));
+                }
+            }
+            
+            if (pipeConfigs.Count > 0)
+            {
+                var (gridCenter, searchRange) = CalculateOptimalGridBounds(pipeConfigs);
+                var (validatedCenter, validatedRange) = ValidateAndClampGridBounds(gridCenter, searchRange);
+                
+                Debug.Log($"[PipeGenerator] 계산 결과:");
+                Debug.Log($"  - 그리드 중심: {validatedCenter}");
+                Debug.Log($"  - 검색 범위: {validatedRange}");
+                Debug.Log($"  - 예상 그리드 크기: {Vector3.one * validatedRange}");
+            }
         }
     }
 }
