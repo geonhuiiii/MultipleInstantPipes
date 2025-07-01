@@ -22,6 +22,12 @@ namespace InstantPipes
         public float gridSize = 3f;
         public int maxConcurrentTasks = 4;
         
+        [Header("성능 설정")]
+        public int maxIterations = 1000;
+        public int maxTimeoutSeconds = 30;
+        public int maxNodesPerAxis = 100;
+        public int maxTotalNodes = 50000;
+        
         [Header("디버그")]
         public bool enableDebugLogs = true;
         
@@ -36,6 +42,9 @@ namespace InstantPipes
             try
             {
                 pathFinder = new MultiThreadPathFinder(maxConcurrentTasks);
+                
+                // 성능 설정 전달
+                pathFinder.SetPerformanceSettings(maxIterations, maxTimeoutSeconds, maxNodesPerAxis, maxTotalNodes);
                 
                 // 씬의 중심점 계산 (모든 렌더러의 중심)
                 CalculateSceneCenter();

@@ -59,6 +59,12 @@ namespace InstantPipes
         private readonly object requestsLock = new object();
         private bool isInitialized = false;
         
+        // 성능 설정 필드들
+        private int maxIterations = 1000;
+        private int maxTimeoutSeconds = 30;
+        private int maxNodesPerAxis = 100;
+        private int maxTotalNodes = 50000;
+        
         public MultiThreadPathFinder(int maxConcurrentTasks = 4)
         {
             semaphore = new SemaphoreSlim(maxConcurrentTasks, maxConcurrentTasks);
@@ -182,6 +188,17 @@ namespace InstantPipes
                     var pathCreator = new PathCreatorDstar();
                     pathCreator.SetObstacleDataFromShared(sharedObstacleData, obstacleDataLock);
                     
+                    // 성능 설정 전달
+                    pathCreator.SetPerformanceSettings(maxIterations, maxTimeoutSeconds, maxNodesPerAxis, maxTotalNodes);
+                    
+                    // 동적 그리드 계산을 위해 모든 요청 리스트 전달
+                    List<PathRequest> requestsCopy;
+                    lock (requestsLock)
+                    {
+                        requestsCopy = new List<PathRequest>(allRequests);
+                    }
+                    pathCreator.SetPathRequests(requestsCopy);
+                    
                     var path = pathCreator.Create(
                         request.startPoint, 
                         request.startNormal, 
@@ -199,7 +216,7 @@ namespace InstantPipes
                     
                     completedResults.AddOrUpdate(request.pipeId, result, (key, oldValue) => result);
                     
-                    string passType = isInitialPass ? "초기" : "우선순위";
+                    string passType = isInitialPass ? "초기" : "순차";
                     Debug.Log($"[멀티스레딩] {passType} 경로 탐색 완료 - ID: {request.pipeId}, 성공: {result.success}");
                 });
             }
@@ -237,6 +254,15 @@ namespace InstantPipes
             float y = Mathf.Round(pos.y / gridSize) * gridSize;
             float z = Mathf.Round(pos.z / gridSize) * gridSize;
             return new Vector3(x, y, z);
+        }
+
+        // 성능 설정 메서드
+        public void SetPerformanceSettings(int maxIter, int maxTimeout, int maxNodes, int maxTotal)
+        {
+            maxIterations = maxIter;
+            maxTimeoutSeconds = maxTimeout;
+            maxNodesPerAxis = maxNodes;
+            maxTotalNodes = maxTotal;
         }
     }
 
@@ -363,6 +389,12 @@ namespace InstantPipes
         private float km = 0;
         private int width, height;
         private HashSet<Vector3> obstacles;
+        
+        // 동적 그리드 범위 계산을 위한 필드들
+        private Vector3 gridMinBounds;
+        private Vector3 gridMaxBounds;
+        private List<PathRequest> allPathRequests;
+        
         bool AreEqual(Vector3 a, Vector3 b, float epsilon = 0.001f)
         {
             return Vector3.SqrMagnitude(a - b) < epsilon * epsilon;
@@ -380,14 +412,9 @@ namespace InstantPipes
             Vector3 pathEnd = endPoint + endNormal.normalized * Height;
             this.goal = SnapToGrid(pathEnd, GridSize);
             this.start = SnapToGrid(pathStart, GridSize);
-            //this.obstacles = None;
 
-            for (int x = 0; x < 10; x++)
-                for (int y = 0; y < 10; y++)
-                    for (int z = 0; z < 5; z++){
-                        Vector3 pos = SnapToGrid(new Vector3(x, y, z), GridSize);
-                        nodes[pos] = new Node(pos);
-                    }
+            // 동적 그리드 생성 (요청 리스트가 설정되어 있는 경우)
+            CreateDynamicGrid();
 
             GetNode(goal).rhs = 0;
             Debug.Log("삽입");
@@ -396,7 +423,6 @@ namespace InstantPipes
 
             path.Add(startPoint);
             path.Add(pathStart);
-
 
             LastPathSuccess = true;
             hasCollision = false;
@@ -485,12 +511,205 @@ namespace InstantPipes
         private object sharedObstacleDataLock;
         private bool useSharedObstacleData = false;
         
+        // 성능 설정 필드들
+        private int customMaxIterations = 1000;
+        private int customMaxTimeoutSeconds = 30;
+        private int customMaxNodesPerAxis = 100;
+        private int customMaxTotalNodes = 50000;
+        
         // 공유 장애물 데이터 설정 (멀티스레딩용)
         public void SetObstacleDataFromShared(Dictionary<Vector3, bool> sharedData, object lockObject)
         {
             sharedObstacleData = sharedData;
             sharedObstacleDataLock = lockObject;
             useSharedObstacleData = true;
+        }
+        
+        // 성능 설정 (매니저에서 전달받음)
+        public void SetPerformanceSettings(int maxIterations, int maxTimeoutSeconds, int maxNodesPerAxis, int maxTotalNodes)
+        {
+            customMaxIterations = maxIterations;
+            customMaxTimeoutSeconds = maxTimeoutSeconds;
+            customMaxNodesPerAxis = maxNodesPerAxis;
+            customMaxTotalNodes = maxTotalNodes;
+            
+            // 기존 MaxIterations 필드도 업데이트
+            MaxIterations = maxIterations;
+        }
+        
+        // 요청 리스트 설정 (동적 그리드 계산용)
+        public void SetPathRequests(List<PathRequest> requests)
+        {
+            allPathRequests = requests;
+            CalculateGridBounds();
+        }
+        
+        // 모든 요청의 시작점과 끝점을 기반으로 그리드 범위 계산
+        private void CalculateGridBounds()
+        {
+            if (allPathRequests == null || allPathRequests.Count == 0)
+            {
+                // 기본값 설정
+                gridMinBounds = new Vector3(-10, -5, -10);
+                gridMaxBounds = new Vector3(10, 10, 10);
+                Debug.LogWarning("[그리드] 요청이 없어 기본 범위 사용");
+                return;
+            }
+            
+            // 첫 번째 요청의 시작점으로 초기화
+            var firstRequest = allPathRequests[0];
+            Vector3 firstStart = firstRequest.startPoint + firstRequest.startNormal.normalized * Height;
+            Vector3 firstEnd = firstRequest.endPoint + firstRequest.endNormal.normalized * Height;
+            
+            float minX = Mathf.Min(firstStart.x, firstEnd.x);
+            float maxX = Mathf.Max(firstStart.x, firstEnd.x);
+            float minY = Mathf.Min(firstStart.y, firstEnd.y);
+            float maxY = Mathf.Max(firstStart.y, firstEnd.y);
+            float minZ = Mathf.Min(firstStart.z, firstEnd.z);
+            float maxZ = Mathf.Max(firstStart.z, firstEnd.z);
+            
+            // 모든 요청의 시작점과 끝점을 검사
+            foreach (var request in allPathRequests)
+            {
+                Vector3 startPos = request.startPoint + request.startNormal.normalized * Height;
+                Vector3 endPos = request.endPoint + request.endNormal.normalized * Height;
+                
+                // X축 최소/최대값 업데이트
+                minX = Mathf.Min(minX, startPos.x, endPos.x);
+                maxX = Mathf.Max(maxX, startPos.x, endPos.x);
+                
+                // Y축 최소/최대값 업데이트
+                minY = Mathf.Min(minY, startPos.y, endPos.y);
+                maxY = Mathf.Max(maxY, startPos.y, endPos.y);
+                
+                // Z축 최소/최대값 업데이트
+                minZ = Mathf.Min(minZ, startPos.z, endPos.z);
+                maxZ = Mathf.Max(maxZ, startPos.z, endPos.z);
+            }
+            
+            // 여유 공간 추가 (제한된 패딩)
+            float basePadding = GridSize * 3;
+            float maxPadding = 50f; // 최대 패딩 제한
+            float padding = Mathf.Min(basePadding, maxPadding);
+            
+            // 범위가 너무 작은 경우 최소 크기 보장
+            float minRange = GridSize * 10;
+            
+            minX -= padding;
+            maxX += padding;
+            minY -= padding;
+            maxY += padding;
+            minZ -= padding;
+            maxZ += padding + 10f; // Z축 최대값에 +10 추가
+            
+            // 최소 범위 보장
+            if (maxX - minX < minRange)
+            {
+                float center = (minX + maxX) * 0.5f;
+                minX = center - minRange * 0.5f;
+                maxX = center + minRange * 0.5f;
+            }
+            
+            if (maxY - minY < minRange)
+            {
+                float center = (minY + maxY) * 0.5f;
+                minY = center - minRange * 0.5f;
+                maxY = center + minRange * 0.5f;
+            }
+            
+            if (maxZ - minZ < minRange)
+            {
+                float center = (minZ + maxZ) * 0.5f;
+                minZ = center - minRange * 0.5f;
+                maxZ = center + minRange * 0.5f;
+            }
+            
+            gridMinBounds = new Vector3(minX, minY, minZ);
+            gridMaxBounds = new Vector3(maxX, maxY, maxZ);
+            
+            // 범위 크기 계산 및 로그
+            Vector3 rangeSize = gridMaxBounds - gridMinBounds;
+            int estimatedNodes = Mathf.RoundToInt((rangeSize.x / GridSize) * (rangeSize.y / GridSize) * (rangeSize.z / GridSize));
+            
+            Debug.Log($"[그리드] 동적 범위 계산 완료");
+            Debug.Log($"  범위: {gridMinBounds} ~ {gridMaxBounds}");
+            Debug.Log($"  크기: {rangeSize}");
+            Debug.Log($"  예상 노드 수: {estimatedNodes:N0}");
+            
+            if (estimatedNodes > 100000)
+            {
+                Debug.LogWarning($"[그리드] 예상 노드 수가 많음: {estimatedNodes:N0}개 - 성능 저하 가능");
+            }
+        }
+        
+        // 동적 그리드 노드 생성
+        private void CreateDynamicGrid()
+        {
+            if (gridMinBounds == Vector3.zero && gridMaxBounds == Vector3.zero)
+            {
+                CalculateGridBounds();
+            }
+            
+            nodes.Clear();
+            
+            // 그리드 크기 제한 (성능 및 메모리 보호)
+            Vector3 gridSize = gridMaxBounds - gridMinBounds;
+            
+            // 그리드가 너무 클 경우 범위 축소
+            if (gridSize.x / GridSize > customMaxNodesPerAxis)
+            {
+                float center = (gridMinBounds.x + gridMaxBounds.x) * 0.5f;
+                float halfRange = customMaxNodesPerAxis * GridSize * 0.5f;
+                gridMinBounds.x = center - halfRange;
+                gridMaxBounds.x = center + halfRange;
+                Debug.LogWarning($"[그리드] X축 범위가 너무 커서 축소: {gridMinBounds.x} ~ {gridMaxBounds.x}");
+            }
+            
+            if (gridSize.y / GridSize > customMaxNodesPerAxis)
+            {
+                float center = (gridMinBounds.y + gridMaxBounds.y) * 0.5f;
+                float halfRange = customMaxNodesPerAxis * GridSize * 0.5f;
+                gridMinBounds.y = center - halfRange;
+                gridMaxBounds.y = center + halfRange;
+                Debug.LogWarning($"[그리드] Y축 범위가 너무 커서 축소: {gridMinBounds.y} ~ {gridMaxBounds.y}");
+            }
+            
+            if (gridSize.z / GridSize > customMaxNodesPerAxis)
+            {
+                float center = (gridMinBounds.z + gridMaxBounds.z) * 0.5f;
+                float halfRange = customMaxNodesPerAxis * GridSize * 0.5f;
+                gridMinBounds.z = center - halfRange;
+                gridMaxBounds.z = center + halfRange;
+                Debug.LogWarning($"[그리드] Z축 범위가 너무 커서 축소: {gridMinBounds.z} ~ {gridMaxBounds.z}");
+            }
+            
+            // 안전한 그리드 생성
+            int nodeCount = 0;
+            
+            for (float x = gridMinBounds.x; x <= gridMaxBounds.x && nodeCount < customMaxTotalNodes; x += GridSize)
+            {
+                for (float y = gridMinBounds.y; y <= gridMaxBounds.y && nodeCount < customMaxTotalNodes; y += GridSize)
+                {
+                    for (float z = gridMinBounds.z; z <= gridMaxBounds.z && nodeCount < customMaxTotalNodes; z += GridSize)
+                    {
+                        Vector3 pos = SnapToGrid(new Vector3(x, y, z), GridSize);
+                        if (!nodes.ContainsKey(pos))
+                        {
+                            nodes[pos] = new Node(pos);
+                            nodeCount++;
+                        }
+                        
+                        // 안전장치: 너무 많은 노드 생성 방지
+                        if (nodeCount >= customMaxTotalNodes)
+                        {
+                            Debug.LogWarning($"[그리드] 최대 노드 수 도달로 생성 중단: {customMaxTotalNodes}개");
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            Debug.Log($"[그리드] 동적 노드 생성 완료: {nodeCount}개 노드 (범위: {gridMinBounds} ~ {gridMaxBounds})");
         }
         
         private bool IsObstacle(Vector3 position)
@@ -516,28 +735,28 @@ namespace InstantPipes
             else
             {
                 // 메인 스레드에서는 Physics API 사용
-                Vector3[] directions = new Vector3[]
-                {
-                    Vector3.forward,
-                    Vector3.back,
-                    Vector3.left,
-                    Vector3.right,
-                    Vector3.up,
-                    Vector3.down
-                };
-                
-                float checkRadius = Radius * obstacleAvoidanceMargin;
-                for (int i = 0; i < directions.Length; i++)
-                {
-                    Vector3 dir = directions[i];
+            Vector3[] directions = new Vector3[]
+            {
+                Vector3.forward,
+                Vector3.back,
+                Vector3.left,
+                Vector3.right,
+                Vector3.up,
+                Vector3.down
+            };
 
-                    if (Physics.Raycast(key, dir, out RaycastHit hit, 1f, obstacleLayerMask))
-                    {
+            float checkRadius = Radius * obstacleAvoidanceMargin;
+            for (int i = 0; i < directions.Length; i++)
+            {
+                Vector3 dir = directions[i];
+
+                if (Physics.Raycast(key, dir, out RaycastHit hit, 1f, obstacleLayerMask))
+                {
                         isObstacle = true;
                         break;
-                    }
                 }
-            }
+                }
+                }
 
             // 결과 캐싱
             obstacleCache[key] = isObstacle;
@@ -555,11 +774,11 @@ namespace InstantPipes
                 {
                     float cost = Cost(u, s);
                     float g_s = GetNode(s).g;
-                    
+
                     if (cost != Mathf.Infinity) // 무한대 비용이 아닌 경우만 고려
                     {
-                        float total = cost + g_s;
-                        if (total < minRhs) minRhs = total;
+                    float total = cost + g_s;
+                    if (total < minRhs) minRhs = total;
                     }
                 }
 
@@ -579,9 +798,21 @@ namespace InstantPipes
         public void ComputeShortestPath()
         {
             var iteration = 0;
+            var startTime = System.DateTime.Now;
+            
+            Debug.Log($"[DStar] 경로 탐색 시작 - 목표: {goal}, 시작: {start}");
             
             while (openList.Count > 0 && iteration < MaxIterations)
             {
+                // 타임아웃 체크
+                var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
+                if (elapsedTime > customMaxTimeoutSeconds)
+                {
+                    Debug.LogError($"[DStar] 타임아웃 발생 ({customMaxTimeoutSeconds}초) - 반복: {iteration}, OpenList: {openList.Count}");
+                    LastPathSuccess = false;
+                    break;
+                }
+                
                 var currentKey = openList.Peek();
                 var startKey = CalculateKey(start);
                 var startNode = GetNode(start);
@@ -590,15 +821,26 @@ namespace InstantPipes
                 if ((CompareKey(currentKey, startKey) >= 0) && 
                     (Mathf.Abs(startNode.g - startNode.rhs) < 0.001f))
                 {
-                    Debug.Log($"[종료] iteration: {iteration}, start g: {startNode.g}, rhs: {startNode.rhs}");
+                    Debug.Log($"[DStar] 정상 종료 - 반복: {iteration}, 시간: {elapsedTime:F2}초");
                     break;
                 }
                 
                 iteration++;
+                
+                // 진행 상황 로그 (100번마다)
+                if (iteration % 100 == 0)
+                {
+                    Debug.Log($"[DStar] 진행중... 반복: {iteration}/{MaxIterations}, OpenList: {openList.Count}, 시간: {elapsedTime:F1}초");
+                }
+                
                 var u = openList.Dequeue();
                 var uPos = u.position;
                 
-                Debug.Log($"[처리중] iteration: {iteration}, pos: {uPos}, g: {u.g}, rhs: {u.rhs}");
+                // 노드가 goal과 너무 가깝거나 같으면 조기 종료 고려
+                if (AreEqual(uPos, goal) && Mathf.Abs(u.g - u.rhs) < 0.001f)
+                {
+                    Debug.Log($"[DStar] Goal 노드 처리 완료 - 반복: {iteration}");
+                }
                 
                 if (u.g > u.rhs)
                 {
@@ -613,44 +855,105 @@ namespace InstantPipes
                     foreach (var s in GetNeighbors(uPos))
                         UpdateVertex(s);
                 }
+                
+                // OpenList가 너무 클 경우 경고
+                if (openList.Count > 10000)
+                {
+                    Debug.LogWarning($"[DStar] OpenList가 너무 큼: {openList.Count}개");
+                }
             }
+            
+            var totalTime = (System.DateTime.Now - startTime).TotalSeconds;
             
             if (iteration >= MaxIterations)
             {
-                Debug.LogWarning($"[DStar] 최대 반복 횟수 도달: {MaxIterations}");
+                Debug.LogError($"[DStar] 최대 반복 횟수 도달: {MaxIterations}, 시간: {totalTime:F2}초");
                 LastPathSuccess = false;
             }
+            else if (openList.Count == 0)
+            {
+                Debug.LogWarning($"[DStar] OpenList 소진으로 종료 - 반복: {iteration}, 시간: {totalTime:F2}초");
+                // OpenList가 비었지만 경로가 있을 수 있으므로 success는 GetPath에서 결정
+            }
+            
+            Debug.Log($"[DStar] 탐색 완료 - 총 반복: {iteration}, 총 시간: {totalTime:F2}초, OpenList 남은 수: {openList.Count}");
         }
 
         public List<Vector3> GetPath()
         {
             List<Vector3> path = new();
             Vector3 current = start;
-            Debug.Log("1");
-            while (current != goal)
+            int maxPathSteps = 10000; // 최대 경로 단계 수
+            int steps = 0;
+            var startTime = System.DateTime.Now;
+            
+            Debug.Log($"[GetPath] 경로 구성 시작: {start} → {goal}");
+            
+            while (!AreEqual(current, goal) && steps < maxPathSteps)
             {
-                Debug.Log($"{current.x}, {current.y}, {current.z}");
+                // 타임아웃 체크 (10초)
+                var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
+                if (elapsedTime > 10)
+                {
+                    Debug.LogError($"[GetPath] 타임아웃 발생 (10초) - 단계: {steps}");
+                    return null;
+                }
+                
                 float min = Mathf.Infinity;
                 Vector3 next = current;
+                bool foundValidNeighbor = false;
+                
                 foreach (var s in GetNeighbors(current))
                 {
-                    Debug.Log("11");
                     float cost = Cost(current, s) + GetNode(s).g;
-                    Debug.Log("22");
-                    if (cost < min)
+                    
+                    if (cost < min && cost != Mathf.Infinity)
                     {
                         min = cost;
                         next = s;
+                        foundValidNeighbor = true;
                     }
                 }
 
-                if (min == Mathf.Infinity || next == current)
+                if (!foundValidNeighbor || min == Mathf.Infinity || AreEqual(next, current))
+                {
+                    Debug.LogWarning($"[GetPath] 경로 없음 - 단계: {steps}, 현재: {current}, 다음: {next}, 최소비용: {min}");
                     return null; // No path
+                }
 
                 current = next;
                 path.Add(current);
+                steps++;
+                
+                // 진행 상황 로그 (1000번마다)
+                if (steps % 1000 == 0)
+                {
+                    Debug.Log($"[GetPath] 진행중... 단계: {steps}, 현재: {current}, 목표까지 거리: {Vector3.Distance(current, goal)}");
+                }
+                
+                // 목표 근처에 도달했는지 체크
+                if (Vector3.Distance(current, goal) < GridSize * 2)
+                {
+                    Debug.Log($"[GetPath] 목표 근처 도달 - 단계: {steps}, 거리: {Vector3.Distance(current, goal)}");
+                }
             }
-            Debug.Log("2");
+            
+            var totalTime = (System.DateTime.Now - startTime).TotalSeconds;
+            
+            if (steps >= maxPathSteps)
+            {
+                Debug.LogError($"[GetPath] 최대 단계 수 도달: {maxPathSteps}, 시간: {totalTime:F2}초");
+                return null;
+            }
+            
+            if (AreEqual(current, goal))
+            {
+                Debug.Log($"[GetPath] 경로 구성 성공 - 단계: {steps}, 시간: {totalTime:F2}초, 경로 길이: {path.Count}");
+            }
+            else
+            {
+                Debug.LogWarning($"[GetPath] 목표 미도달 - 현재: {current}, 목표: {goal}, 거리: {Vector3.Distance(current, goal)}");
+            }
 
             return path;
         }
