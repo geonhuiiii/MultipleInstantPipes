@@ -594,12 +594,6 @@ namespace InstantPipes
             tempCollider.transform.rotation = Quaternion.FromToRotation(Vector3.up, normal);
             tempCollider.AddComponent<CapsuleCollider>();
             
-            // PathVisualizer에 콜라이더 추가 (있는 경우)
-            var visualizer = FindObjectOfType<PathVisualizer>();
-            if (visualizer != null)
-            {
-                visualizer.TrackTemporaryColliders(tempCollider);
-            }
             
             return tempCollider;
         }
@@ -618,12 +612,6 @@ namespace InstantPipes
             
             tempCollider.AddComponent<SphereCollider>();
             
-            // PathVisualizer에 콜라이더 추가 (있는 경우)
-            var visualizer = FindObjectOfType<PathVisualizer>();
-            if (visualizer != null)
-            {
-                visualizer.TrackTemporaryColliders(tempCollider);
-            }
             
             return tempCollider;
         }
@@ -1209,32 +1197,8 @@ namespace InstantPipes
         }
 
         // 경로 시각화 업데이트
-        public void UpdatePathVisualization()
-        {
-            var visualizer = FindObjectOfType<PathVisualizer>();
-            if (visualizer != null)
-            {
-                visualizer.UpdateVisualization();
-            }
-        }
-        
         // 경로 시각화를 위한, 일반적인 사용 케이스에 대한 편의 메서드
-        public PathVisualizer CreateVisualizer()
-        {
-            // 기존 시각화 도구 찾기
-            var existingVisualizer = FindObjectOfType<PathVisualizer>();
-            if (existingVisualizer != null)
-            {
-                return existingVisualizer;
-            }
-            
-            // 새 시각화 도구 생성
-            var go = new GameObject("Path Visualizer");
-            var visualizer = go.AddComponent<PathVisualizer>();
-            visualizer.pipeGenerator = this;
-            
-            return visualizer;
-        }
+
         public float CalculatePathLength(List<Vector3> points)
         {
             float length = 0f;
