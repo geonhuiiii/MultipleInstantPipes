@@ -59,9 +59,20 @@ namespace InstantPipes
         private readonly object requestsLock = new object();
         private bool isInitialized = false;
         
+        // 그리드 범위 계산을 위한 필드들
+        private Vector3 gridMin;
+        private Vector3 gridMax;
+        private float currentGridSize = 3f; // 기본 그리드 크기
+        
         public MultiThreadPathFinder(int maxConcurrentTasks = 4)
         {
             semaphore = new SemaphoreSlim(maxConcurrentTasks, maxConcurrentTasks);
+        }
+
+        // 그리드 크기 설정
+        public void SetGridSize(float gridSize)
+        {
+            currentGridSize = gridSize;
         }
 
         // 메인 스레드에서 초기 장애물 데이터 수집
@@ -93,6 +104,52 @@ namespace InstantPipes
                 isInitialized = true;
                 Debug.Log($"[멀티스레딩] 장애물 데이터 초기화 완료: {sharedObstacleData.Count}개 위치");
             }
+        }
+        
+        // 모든 파이프 요청으로부터 그리드 범위 계산
+        private void CalculateGridBounds(float gridSize)
+        {
+            List<PathRequest> requests;
+            lock (requestsLock)
+            {
+                requests = new List<PathRequest>(allRequests);
+            }
+            
+            if (requests.Count == 0)
+            {
+                gridMin = Vector3.zero;
+                gridMax = new Vector3(30, 15, 15); // 기본값
+                return;
+            }
+            
+            // 첫 번째 요청으로 초기화
+            var firstRequest = requests[0];
+            float minX = Mathf.Min(firstRequest.startPoint.x, firstRequest.endPoint.x);
+            float maxX = Mathf.Max(firstRequest.startPoint.x, firstRequest.endPoint.x);
+            float minY = Mathf.Min(firstRequest.startPoint.y, firstRequest.endPoint.y);
+            float maxY = Mathf.Max(firstRequest.startPoint.y, firstRequest.endPoint.y);
+            float minZ = Mathf.Min(firstRequest.startPoint.z, firstRequest.endPoint.z);
+            float maxZ = Mathf.Max(firstRequest.startPoint.z, firstRequest.endPoint.z);
+            
+            // 나머지 요청들로 범위 확장
+            for (int i = 1; i < requests.Count; i++)
+            {
+                var request = requests[i];
+                
+                minX = Mathf.Min(minX, request.startPoint.x, request.endPoint.x);
+                maxX = Mathf.Max(maxX, request.startPoint.x, request.endPoint.x);
+                minY = Mathf.Min(minY, request.startPoint.y, request.endPoint.y);
+                maxY = Mathf.Max(maxY, request.startPoint.y, request.endPoint.y);
+                minZ = Mathf.Min(minZ, request.startPoint.z, request.endPoint.z);
+                maxZ = Mathf.Max(maxZ, request.startPoint.z, request.endPoint.z);
+            }
+            
+            // 여유 공간 추가
+            float margin = gridSize * 5; // 그리드 크기의 5배만큼 여유
+            gridMin = new Vector3(minX - margin, minY - margin, minZ - margin);
+            gridMax = new Vector3(maxX + margin, maxY + margin, maxZ + margin + 3f); // Z축은 +3 추가
+            
+            Debug.Log($"[멀티스레딩] 그리드 범위 계산: Min({gridMin.x:F1}, {gridMin.y:F1}, {gridMin.z:F1}) ~ Max({gridMax.x:F1}, {gridMax.y:F1}, {gridMax.z:F1})");
         }
         
         public bool IsObstacleThreadSafe(Vector3 position, float gridSize)
@@ -132,6 +189,9 @@ namespace InstantPipes
             
             Debug.Log($"[멀티스레딩] 초기 경로 탐색 시작: {requests.Count}개 파이프");
             
+            // 그리드 범위 계산 (멀티스레딩 전에 미리 계산)
+            CalculateGridBounds(currentGridSize);
+            
             // 병렬로 초기 경로 탐색
             foreach (var request in requests)
             {
@@ -154,6 +214,9 @@ namespace InstantPipes
             }
             
             Debug.Log($"[멀티스레딩] 순차 경로 탐색 시작: {orderedRequests.Count}개 파이프 (순서대로)");
+            
+            // 그리드 범위 재계산 (순차 처리 전에)
+            CalculateGridBounds(currentGridSize);
             
             // 순서대로 처리 (실패한 파이프 또는 추가 최적화가 필요한 경우)
             foreach (var request in orderedRequests)
@@ -182,6 +245,10 @@ namespace InstantPipes
                     var pathCreator = new PathCreatorDstar();
                     pathCreator.SetObstacleDataFromShared(sharedObstacleData, obstacleDataLock);
                     
+                    // 계산된 그리드 범위와 크기 설정
+                    pathCreator.SetGridBounds(gridMin, gridMax);
+                    pathCreator.SetGridSizeValue(currentGridSize);
+                    
                     var path = pathCreator.Create(
                         request.startPoint, 
                         request.startNormal, 
@@ -199,7 +266,7 @@ namespace InstantPipes
                     
                     completedResults.AddOrUpdate(request.pipeId, result, (key, oldValue) => result);
                     
-                    string passType = isInitialPass ? "초기" : "우선순위";
+                    string passType = isInitialPass ? "초기" : "순차";
                     Debug.Log($"[멀티스레딩] {passType} 경로 탐색 완료 - ID: {request.pipeId}, 성공: {result.success}");
                 });
             }
@@ -380,14 +447,26 @@ namespace InstantPipes
             Vector3 pathEnd = endPoint + endNormal.normalized * Height;
             this.goal = SnapToGrid(pathEnd, GridSize);
             this.start = SnapToGrid(pathStart, GridSize);
-            //this.obstacles = None;
 
-            for (int x = 0; x < 10; x++)
-                for (int y = 0; y < 10; y++)
-                    for (int z = 0; z < 5; z++){
-                        Vector3 pos = SnapToGrid(new Vector3(x, y, z), GridSize);
+            // 동적 그리드 생성
+            int gridCountX = Mathf.RoundToInt((gridMax.x - gridMin.x) / GridSize) + 1;
+            int gridCountY = Mathf.RoundToInt((gridMax.y - gridMin.y) / GridSize) + 1;
+            int gridCountZ = Mathf.RoundToInt((gridMax.z - gridMin.z) / GridSize) + 1;
+            
+            Debug.Log($"[DStar] 동적 그리드 생성: {gridCountX} x {gridCountY} x {gridCountZ} = {gridCountX * gridCountY * gridCountZ}개 노드");
+            
+            for (int x = 0; x < gridCountX; x++)
+            {
+                for (int y = 0; y < gridCountY; y++)
+                {
+                    for (int z = 0; z < gridCountZ; z++)
+                    {
+                        Vector3 worldPos = gridMin + new Vector3(x * GridSize, y * GridSize, z * GridSize);
+                        Vector3 pos = SnapToGrid(worldPos, GridSize);
                         nodes[pos] = new Node(pos);
                     }
+                }
+            }
 
             GetNode(goal).rhs = 0;
             Debug.Log("삽입");
@@ -471,9 +550,15 @@ namespace InstantPipes
             foreach (var dir in dirs)
             {
                 Vector3 n = SnapToGrid(pos + dir * GridSize, GridSize);
-                //if (n.x >= 0 && n.y >= 0 && n.x < width && n.y < height)
-                neighbors.Add(n);
-                if (AreEqual(n, goal)) Debug.Log($"[이웃에 goal 있음] {pos} → {n}");
+                
+                // 동적 그리드 범위 체크
+                if (n.x >= gridMin.x && n.x <= gridMax.x &&
+                    n.y >= gridMin.y && n.y <= gridMax.y &&
+                    n.z >= gridMin.z && n.z <= gridMax.z)
+                {
+                    neighbors.Add(n);
+                    if (AreEqual(n, goal)) Debug.Log($"[이웃에 goal 있음] {pos} → {n}");
+                }
             }
 
             return neighbors;
@@ -485,12 +570,30 @@ namespace InstantPipes
         private object sharedObstacleDataLock;
         private bool useSharedObstacleData = false;
         
+        // 동적 그리드 범위를 위한 필드들
+        private Vector3 gridMin = Vector3.zero;
+        private Vector3 gridMax = new Vector3(30, 15, 15);
+        
         // 공유 장애물 데이터 설정 (멀티스레딩용)
         public void SetObstacleDataFromShared(Dictionary<Vector3, bool> sharedData, object lockObject)
         {
             sharedObstacleData = sharedData;
             sharedObstacleDataLock = lockObject;
             useSharedObstacleData = true;
+        }
+        
+        // 그리드 범위 설정
+        public void SetGridBounds(Vector3 min, Vector3 max)
+        {
+            gridMin = min;
+            gridMax = max;
+            Debug.Log($"[DStar] 그리드 범위 설정: Min({gridMin.x:F1}, {gridMin.y:F1}, {gridMin.z:F1}) ~ Max({gridMax.x:F1}, {gridMax.y:F1}, {gridMax.z:F1})");
+        }
+        
+        // 그리드 크기 설정
+        public void SetGridSizeValue(float size)
+        {
+            GridSize = size;
         }
         
         private bool IsObstacle(Vector3 position)

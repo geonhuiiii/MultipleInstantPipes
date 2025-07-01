@@ -37,11 +37,14 @@ namespace InstantPipes
             {
                 pathFinder = new MultiThreadPathFinder(maxConcurrentTasks);
                 
+                // 그리드 크기 설정
+                pathFinder.SetGridSize(gridSize);
+                
                 // 씬의 중심점 계산 (모든 렌더러의 중심)
                 CalculateSceneCenter();
                 
                 if (enableDebugLogs)
-                    Debug.Log($"[파이프 매니저] 장애물 데이터 초기화 시작 - 중심: {sceneCenter}, 범위: {detectionRange}");
+                    Debug.Log($"[파이프 매니저] 장애물 데이터 초기화 시작 - 중심: {sceneCenter}, 범위: {detectionRange}, 그리드 크기: {gridSize}");
                 
                 // 메인 스레드에서 장애물 데이터 수집
                 pathFinder.InitializeObstacleData(sceneCenter, detectionRange, obstacleLayerMask, gridSize);
