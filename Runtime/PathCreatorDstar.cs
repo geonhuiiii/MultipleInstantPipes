@@ -371,8 +371,6 @@ namespace InstantPipes
         public List<Vector3> Create(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float pipeRadius)
         {
             obstacleCache.Clear();
-            this.width = 100;
-            this.height = 5;
             Radius = pipeRadius;
             var path = new List<Vector3>();
 
@@ -380,14 +378,60 @@ namespace InstantPipes
             Vector3 pathEnd = endPoint + endNormal.normalized * Height;
             this.goal = SnapToGrid(pathEnd, GridSize);
             this.start = SnapToGrid(pathStart, GridSize);
-            //this.obstacles = None;
 
-            for (int x = 0; x < 10; x++)
-                for (int y = 0; y < 10; y++)
-                    for (int z = 0; z < 5; z++){
+            // 시작점과 끝점을 기반으로 그리드 범위 계산
+            Vector3[] points = { startPoint, endPoint, pathStart, pathEnd };
+            
+            // X,Y,Z 각각의 최소값과 최대값 계산
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minY = float.MaxValue, maxY = float.MinValue;
+            float minZ = float.MaxValue, maxZ = float.MinValue;
+            
+            foreach (var point in points)
+            {
+                minX = Mathf.Min(minX, point.x);
+                maxX = Mathf.Max(maxX, point.x);
+                minY = Mathf.Min(minY, point.y);
+                maxY = Mathf.Max(maxY, point.y);
+                minZ = Mathf.Min(minZ, point.z);
+                maxZ = Mathf.Max(maxZ, point.z);
+            }
+            
+            // 여유 공간 추가 (그리드 크기의 5배)
+            float margin = GridSize * 5;
+            minX -= margin;
+            maxX += margin;
+            minY -= margin;
+            maxY += margin;
+            minZ -= margin;
+            maxZ = Mathf.Max(maxZ + margin, minZ + 10); // Z축 최대 높이는 +10 보장
+            
+            // 그리드 범위를 GridSize 단위로 정렬
+            minX = Mathf.Floor(minX / GridSize) * GridSize;
+            maxX = Mathf.Ceil(maxX / GridSize) * GridSize;
+            minY = Mathf.Floor(minY / GridSize) * GridSize;
+            maxY = Mathf.Ceil(maxY / GridSize) * GridSize;
+            minZ = Mathf.Floor(minZ / GridSize) * GridSize;
+            maxZ = Mathf.Ceil(maxZ / GridSize) * GridSize;
+            
+            Debug.Log($"[그리드 범위] X: {minX}~{maxX}, Y: {minY}~{maxY}, Z: {minZ}~{maxZ}");
+            
+            // 동적 그리드 생성
+            for (float x = minX; x <= maxX; x += GridSize)
+            {
+                for (float y = minY; y <= maxY; y += GridSize)
+                {
+                    for (float z = minZ; z <= maxZ; z += GridSize)
+                    {
                         Vector3 pos = SnapToGrid(new Vector3(x, y, z), GridSize);
                         nodes[pos] = new Node(pos);
                     }
+                }
+            }
+            
+            // 크기 정보 업데이트
+            this.width = Mathf.RoundToInt((maxX - minX) / GridSize) + 1;
+            this.height = Mathf.RoundToInt((maxZ - minZ) / GridSize) + 1;
 
             GetNode(goal).rhs = 0;
             Debug.Log("삽입");
@@ -396,7 +440,6 @@ namespace InstantPipes
 
             path.Add(startPoint);
             path.Add(pathStart);
-
 
             LastPathSuccess = true;
             hasCollision = false;
@@ -461,19 +504,33 @@ namespace InstantPipes
         {
             List<Vector3> neighbors = new();
             Vector3[] dirs = {
-            new Vector3(1, 0, 0),
-            new Vector3(-1, 0, 0),
-            new Vector3(0, 1, 0),
-            new Vector3(0, -1, 0),
-            new Vector3(0, 0, 1),
-            new Vector3(0, 0, -1)
-        };
+                new Vector3(1, 0, 0),   // +X
+                new Vector3(-1, 0, 0),  // -X
+                new Vector3(0, 1, 0),   // +Y
+                new Vector3(0, -1, 0),  // -Y
+                new Vector3(0, 0, 1),   // +Z
+                new Vector3(0, 0, -1)   // -Z
+            };
+            
             foreach (var dir in dirs)
             {
                 Vector3 n = SnapToGrid(pos + dir * GridSize, GridSize);
-                //if (n.x >= 0 && n.y >= 0 && n.x < width && n.y < height)
-                neighbors.Add(n);
-                if (AreEqual(n, goal)) Debug.Log($"[이웃에 goal 있음] {pos} → {n}");
+                
+                // 동적 그리드 경계 체크: 생성된 노드 중에 있는지 확인
+                if (nodes.ContainsKey(n))
+                {
+                    neighbors.Add(n);
+                    
+                    if (AreEqual(n, goal)) 
+                    {
+                        Debug.Log($"[이웃에 goal 있음] {pos} → {n}");
+                    }
+                }
+                else
+                {
+                    // 경계를 벗어난 노드는 제외
+                    Debug.Log($"[경계 외부] {n}은 그리드 범위 밖");
+                }
             }
 
             return neighbors;
@@ -579,6 +636,9 @@ namespace InstantPipes
         public void ComputeShortestPath()
         {
             var iteration = 0;
+            var lastStartG = float.MaxValue;
+            var noChangeCount = 0;
+            const int maxNoChangeIterations = 10; // 변화 없이 반복되는 최대 횟수
             
             while (openList.Count > 0 && iteration < MaxIterations)
             {
@@ -586,12 +646,77 @@ namespace InstantPipes
                 var startKey = CalculateKey(start);
                 var startNode = GetNode(start);
                 
-                // 종료 조건: start 노드가 consistent하고(g == rhs) key가 start보다 크거나 같으면 종료
-                if ((CompareKey(currentKey, startKey) >= 0) && 
-                    (Mathf.Abs(startNode.g - startNode.rhs) < 0.001f))
+                // 개선된 종료 조건들
+                bool isConsistent = Mathf.Abs(startNode.g - startNode.rhs) < 0.001f;
+                bool hasValidPath = startNode.g != Mathf.Infinity && startNode.rhs != Mathf.Infinity;
+                bool keyCondition = CompareKey(currentKey, startKey) >= 0;
+                
+                // 추가 조건: 더 이상 개선이 없는 경우
+                if (Mathf.Abs(startNode.g - lastStartG) < 0.001f)
                 {
-                    Debug.Log($"[종료] iteration: {iteration}, start g: {startNode.g}, rhs: {startNode.rhs}");
+                    noChangeCount++;
+                }
+                else
+                {
+                    noChangeCount = 0;
+                    lastStartG = startNode.g;
+                }
+                
+                // 종료 조건: start가 consistent하고 유효한 경로가 있으며 key 조건을 만족하는 경우
+                if (isConsistent && hasValidPath && keyCondition)
+                {
+                    Debug.Log($"[종료] 정상 종료 - iteration: {iteration}, start g: {startNode.g}, rhs: {startNode.rhs}");
                     break;
+                }
+                
+                // 추가 종료 조건: 변화 없이 오래 반복되는 경우
+                if (noChangeCount >= maxNoChangeIterations)
+                {
+                    Debug.Log($"[종료] 변화 없음으로 조기 종료 - iteration: {iteration}, start g: {startNode.g}");
+                    if (startNode.g != Mathf.Infinity)
+                    {
+                        // 일부라도 경로가 있으면 성공으로 처리
+                        break;
+                    }
+                    else
+                    {
+                        // 경로가 전혀 없으면 실패
+                        LastPathSuccess = false;
+                        break;
+                    }
+                }
+                
+                // 추가 종료 조건: openList의 모든 노드가 start보다 나쁜 key를 가지는 경우
+                if (openList.Count > 0)
+                {
+                    bool allWorse = true;
+                    var tempElements = new List<(Node, (float, float))>();
+                    
+                    // openList의 상위 몇 개 노드만 체크 (성능 고려)
+                    int checkCount = Mathf.Min(openList.Count, 5);
+                    for (int i = 0; i < checkCount && openList.Count > 0; i++)
+                    {
+                        var node = openList.Dequeue();
+                        var nodeKey = CalculateKey(node.position);
+                        tempElements.Add((node, nodeKey));
+                        
+                        if (CompareKey(nodeKey, startKey) < 0)
+                        {
+                            allWorse = false;
+                        }
+                    }
+                    
+                    // 노드들을 다시 openList에 추가
+                    foreach (var (node, nodeKey) in tempElements)
+                    {
+                        openList.Enqueue(node, nodeKey);
+                    }
+                    
+                    if (allWorse && hasValidPath)
+                    {
+                        Debug.Log($"[종료] 더 이상 유용한 업데이트 없음 - iteration: {iteration}");
+                        break;
+                    }
                 }
                 
                 iteration++;
@@ -620,39 +745,74 @@ namespace InstantPipes
                 Debug.LogWarning($"[DStar] 최대 반복 횟수 도달: {MaxIterations}");
                 LastPathSuccess = false;
             }
+            
+            // 최종 상태 로깅
+            var finalStartNode = GetNode(start);
+            Debug.Log($"[DStar] 최종 상태 - g: {finalStartNode.g}, rhs: {finalStartNode.rhs}, iterations: {iteration}");
         }
 
         public List<Vector3> GetPath()
         {
             List<Vector3> path = new();
             Vector3 current = start;
-            Debug.Log("1");
-            while (current != goal)
+            int maxPathLength = nodes.Count; // 최대 경로 길이 제한
+            int pathLength = 0;
+            
+            Debug.Log($"[경로 탐색] 시작: {start} → 목표: {goal}");
+            
+            while (!AreEqual(current, goal) && pathLength < maxPathLength)
             {
-                Debug.Log($"{current.x}, {current.y}, {current.z}");
                 float min = Mathf.Infinity;
                 Vector3 next = current;
+                bool foundBetterPath = false;
+                
                 foreach (var s in GetNeighbors(current))
                 {
-                    Debug.Log("11");
                     float cost = Cost(current, s) + GetNode(s).g;
-                    Debug.Log("22");
-                    if (cost < min)
+                    
+                    if (cost < min && cost < Mathf.Infinity)
                     {
                         min = cost;
                         next = s;
+                        foundBetterPath = true;
                     }
                 }
 
-                if (min == Mathf.Infinity || next == current)
-                    return null; // No path
+                // 더 나은 경로가 없거나 제자리에 머물러 있는 경우
+                if (!foundBetterPath || AreEqual(next, current))
+                {
+                    Debug.LogWarning($"[경로 탐색] 경로를 찾을 수 없음 - 현재: {current}, 최소 비용: {min}");
+                    return null;
+                }
+                
+                // 방문한 위치인지 확인 (순환 방지)
+                if (path.Contains(next))
+                {
+                    Debug.LogWarning($"[경로 탐색] 순환 경로 감지 - {next}를 이미 방문함");
+                    return null;
+                }
 
                 current = next;
                 path.Add(current);
+                pathLength++;
+                
+                Debug.Log($"[경로 탐색] 단계 {pathLength}: {current}, 비용: {min}");
             }
-            Debug.Log("2");
-
-            return path;
+            
+            // 목표에 도달했는지 확인
+            if (AreEqual(current, goal))
+            {
+                Debug.Log($"[경로 탐색] 성공! 총 {pathLength}단계로 목표 도달");
+                return path;
+            }
+            else if (pathLength >= maxPathLength)
+            {
+                Debug.LogWarning($"[경로 탐색] 최대 경로 길이 초과: {maxPathLength}");
+                return null;
+            }
+            
+            Debug.LogWarning("[경로 탐색] 알 수 없는 이유로 실패");
+            return null;
         }
 
         private int Compare(Vector3 a, Vector3 b, float epsilon = 0.0001f)
@@ -685,3 +845,4 @@ namespace InstantPipes
         }
     }
 }
+
