@@ -58,6 +58,7 @@ namespace InstantPipes
         private readonly List<PathRequest> allRequests = new(); // 모든 요청을 순서대로 저장
         private readonly object requestsLock = new object();
         private bool isInitialized = false;
+        private float maxPipeRadius = 1f; // 현재까지 요청된 파이프 중 최대 반지름
         
         public MultiThreadPathFinder(int maxConcurrentTasks = 4)
         {
@@ -65,7 +66,7 @@ namespace InstantPipes
         }
 
         // 메인 스레드에서 초기 장애물 데이터 수집
-        public void InitializeObstacleData(Vector3 center, float range, LayerMask layerMask, float gridSize)
+        public void InitializeObstacleData(Vector3 center, float range, LayerMask layerMask, float gridSize, float pipeRadius = 1f)
         {
             lock (obstacleDataLock)
             {
@@ -74,24 +75,64 @@ namespace InstantPipes
                 Collider[] hits = Physics.OverlapSphere(center, range, layerMask);
                 foreach (var hit in hits)
                 {
-                    Vector3 pos = SnapToGrid(hit.transform.position, gridSize);
-                    sharedObstacleData[pos] = true;
+                    Vector3 hitCenter = hit.bounds.center;
+                    Vector3 hitSize = hit.bounds.size;
                     
-                    // 주변 그리드도 장애물로 표시 (안전 마진)
+                    // 장애물의 경계 박스를 기반으로 파이프 반지름을 고려한 안전 영역 설정
+                    float safetyMargin = pipeRadius * 2f; // 파이프 반지름의 2배만큼 안전 마진
+                    
+                    // 확장된 경계 박스 계산
+                    Vector3 expandedMin = hitCenter - (hitSize * 0.5f) - Vector3.one * safetyMargin;
+                    Vector3 expandedMax = hitCenter + (hitSize * 0.5f) + Vector3.one * safetyMargin;
+                    
+                    // 확장된 영역 내의 모든 그리드 점을 장애물로 표시
+                    for (float x = expandedMin.x; x <= expandedMax.x; x += gridSize)
+                    {
+                        for (float y = expandedMin.y; y <= expandedMax.y; y += gridSize)
+                        {
+                            for (float z = expandedMin.z; z <= expandedMax.z; z += gridSize)
+                            {
+                                Vector3 gridPos = SnapToGrid(new Vector3(x, y, z), gridSize);
+                                
+                                // 실제 장애물과의 최단 거리 계산
+                                Vector3 closestPoint = hit.ClosestPoint(gridPos);
+                                float distanceToObstacle = Vector3.Distance(gridPos, closestPoint);
+                                
+                                // 파이프 반지름 + 안전 마진 내에 있으면 장애물로 표시
+                                if (distanceToObstacle <= pipeRadius + safetyMargin * 0.5f)
+                                {
+                                    sharedObstacleData[gridPos] = true;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 기본 위치도 장애물로 표시
+                    Vector3 basePos = SnapToGrid(hit.transform.position, gridSize);
+                    sharedObstacleData[basePos] = true;
+                    
+                    // 주변 그리드도 장애물로 표시 (기존 로직 유지하되 반지름 고려)
                     Vector3[] directions = {
                         Vector3.forward, Vector3.back, Vector3.left, 
-                        Vector3.right, Vector3.up, Vector3.down
+                        Vector3.right, Vector3.up, Vector3.down,
+                        Vector3.forward + Vector3.right, Vector3.forward + Vector3.left,
+                        Vector3.back + Vector3.right, Vector3.back + Vector3.left
                     };
+                    
+                    int radiusInGrids = Mathf.CeilToInt(pipeRadius / gridSize) + 1;
                     
                     foreach (var dir in directions)
                     {
-                        Vector3 adjacentPos = SnapToGrid(pos + dir * gridSize, gridSize);
-                        sharedObstacleData[adjacentPos] = true;
+                        for (int i = 1; i <= radiusInGrids; i++)
+                        {
+                            Vector3 adjacentPos = SnapToGrid(basePos + dir.normalized * gridSize * i, gridSize);
+                            sharedObstacleData[adjacentPos] = true;
+                        }
                     }
                 }
                 
                 isInitialized = true;
-                Debug.Log($"[멀티스레딩] 장애물 데이터 초기화 완료: {sharedObstacleData.Count}개 위치");
+                Debug.Log($"[멀티스레딩] 장애물 데이터 초기화 완료: {sharedObstacleData.Count}개 위치 (반지름 {pipeRadius} 고려)");
             }
         }
         
@@ -115,6 +156,22 @@ namespace InstantPipes
             lock (requestsLock)
             {
                 allRequests.Add(request);
+                
+                // 최대 반지름 업데이트
+                if (request.pipeRadius > maxPipeRadius)
+                {
+                    float oldMaxRadius = maxPipeRadius;
+                    maxPipeRadius = request.pipeRadius;
+                    
+                    Debug.Log($"[멀티스레딩] 최대 파이프 반지름 업데이트: {oldMaxRadius} → {maxPipeRadius}");
+                    
+                    // 반지름이 크게 증가한 경우 장애물 데이터 재계산 필요
+                    if (isInitialized && maxPipeRadius > oldMaxRadius * 1.5f)
+                    {
+                        Debug.Log("[멀티스레딩] 반지름 증가로 인한 장애물 데이터 재계산 필요");
+                        // 필요시 재계산 플래그 설정 (여기서는 로그만 출력)
+                    }
+                }
             }
         }
         
@@ -130,7 +187,23 @@ namespace InstantPipes
                 requests.Add(request);
             }
             
-            Debug.Log($"[멀티스레딩] 초기 경로 탐색 시작: {requests.Count}개 파이프");
+            // 최대 반지름 최종 확인 및 업데이트
+            float finalMaxRadius = 1f;
+            foreach (var request in requests)
+            {
+                if (request.pipeRadius > finalMaxRadius)
+                {
+                    finalMaxRadius = request.pipeRadius;
+                }
+            }
+            
+            if (finalMaxRadius != maxPipeRadius)
+            {
+                maxPipeRadius = finalMaxRadius;
+                Debug.Log($"[멀티스레딩] 최종 최대 반지름 확정: {maxPipeRadius}");
+            }
+            
+            Debug.Log($"[멀티스레딩] 초기 경로 탐색 시작: {requests.Count}개 파이프 (최대 반지름: {maxPipeRadius})");
             
             // 병렬로 초기 경로 탐색
             foreach (var request in requests)
@@ -182,6 +255,9 @@ namespace InstantPipes
                     var pathCreator = new PathCreatorDstar();
                     pathCreator.SetObstacleDataFromShared(sharedObstacleData, obstacleDataLock);
                     
+                    // 파이프별 반지름 설정
+                    pathCreator.Radius = request.pipeRadius;
+                    
                     var path = pathCreator.Create(
                         request.startPoint, 
                         request.startNormal, 
@@ -199,8 +275,8 @@ namespace InstantPipes
                     
                     completedResults.AddOrUpdate(request.pipeId, result, (key, oldValue) => result);
                     
-                    string passType = isInitialPass ? "초기" : "우선순위";
-                    Debug.Log($"[멀티스레딩] {passType} 경로 탐색 완료 - ID: {request.pipeId}, 성공: {result.success}");
+                    string passType = isInitialPass ? "초기" : "순차";
+                    Debug.Log($"[멀티스레딩] {passType} 경로 탐색 완료 - ID: {request.pipeId}, 성공: {result.success}, 반지름: {request.pipeRadius}");
                 });
             }
             finally
@@ -228,6 +304,7 @@ namespace InstantPipes
             lock (requestsLock)
             {
                 allRequests.Clear();
+                maxPipeRadius = 1f; // 최대 반지름도 리셋
             }
         }
         
@@ -397,8 +474,8 @@ namespace InstantPipes
                 maxZ = Mathf.Max(maxZ, point.z);
             }
             
-            // 여유 공간 추가 (그리드 크기의 5배)
-            float margin = GridSize * 5;
+            // 여유 공간 추가 (그리드 크기의 5배 + 파이프 반지름의 3배)
+            float margin = GridSize * 5 + Radius * 3;
             minX -= margin;
             maxX += margin;
             minY -= margin;
@@ -457,9 +534,21 @@ namespace InstantPipes
                 foreach (var p in foundPath)
                 {
                     path.Add(p);
-                    if (!hasCollision && Physics.CheckSphere(p, Radius * 1.2f))
-                        hasCollision = true;
+                    
+                    // 파이프 반지름을 고려한 충돌 검사
+                    if (!hasCollision)
+                    {
+                        // OverlapSphere로 정확한 반지름 충돌 검사
+                        Collider[] overlaps = Physics.OverlapSphere(p, Radius, obstacleLayerMask);
+                        if (overlaps.Length > 0)
+                        {
+                            hasCollision = true;
+                            Debug.LogWarning($"[충돌 감지] 위치: {p}, 반지름: {Radius}, 충돌 객체 수: {overlaps.Length}");
+                        }
+                    }
                 }
+                
+                Debug.Log($"[경로 완성] 총 {foundPath.Count}개 경로점, 충돌: {hasCollision}, 반지름: {Radius}");
             }
 
             path.Add(pathEnd);
@@ -515,7 +604,74 @@ namespace InstantPipes
                 baseCost *= 0.95f; // 5% 보너스
             }
             
+            // 반지름을 고려한 추가 비용 계산
+            float radiusPenalty = CalculateRadiusPenalty(b);
+            baseCost += radiusPenalty;
+            
             return baseCost;
+        }
+        
+        private float CalculateRadiusPenalty(Vector3 position)
+        {
+            float penalty = 0f;
+            float checkRadius = Radius + obstacleAvoidanceMargin;
+            
+            if (useSharedObstacleData)
+            {
+                // 멀티스레딩 환경에서는 공유 데이터 사용
+                lock (sharedObstacleDataLock)
+                {
+                    int gridRadius = Mathf.CeilToInt(checkRadius / GridSize);
+                    int nearbyObstacles = 0;
+                    int totalChecked = 0;
+                    
+                    for (int x = -gridRadius; x <= gridRadius; x++)
+                    {
+                        for (int y = -gridRadius; y <= gridRadius; y++)
+                        {
+                            for (int z = -gridRadius; z <= gridRadius; z++)
+                            {
+                                Vector3 checkPos = position + new Vector3(x * GridSize, y * GridSize, z * GridSize);
+                                float distance = Vector3.Distance(position, checkPos);
+                                
+                                if (distance <= checkRadius)
+                                {
+                                    totalChecked++;
+                                    if (sharedObstacleData.ContainsKey(checkPos) && sharedObstacleData[checkPos])
+                                    {
+                                        nearbyObstacles++;
+                                        // 거리에 반비례하는 패널티
+                                        penalty += (checkRadius - distance) / checkRadius * 0.5f;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // 메인 스레드에서는 Physics API 사용
+                Collider[] nearbyColliders = Physics.OverlapSphere(position, checkRadius, obstacleLayerMask);
+                
+                foreach (var collider in nearbyColliders)
+                {
+                    float distance = Vector3.Distance(position, collider.ClosestPoint(position));
+                    
+                    // 파이프 반지름 안에 들어오는 장애물에 대해 높은 패널티
+                    if (distance < Radius)
+                    {
+                        penalty += (Radius - distance) * 5f; // 높은 패널티
+                    }
+                    else if (distance < checkRadius)
+                    {
+                        // 안전 마진 내의 장애물에 대해 거리 기반 패널티
+                        penalty += (checkRadius - distance) / checkRadius * 2f;
+                    }
+                }
+            }
+            
+            return penalty;
         }
 
         private List<Vector3> GetNeighbors(Vector3 pos)
@@ -585,34 +741,70 @@ namespace InstantPipes
                 // 멀티스레딩 환경에서는 공유 데이터 사용
                 lock (sharedObstacleDataLock)
                 {
-                    isObstacle = sharedObstacleData.ContainsKey(key) && sharedObstacleData[key];
+                    // 반지름을 고려하여 주변 그리드도 체크
+                    float checkRadius = Radius + obstacleAvoidanceMargin;
+                    int gridRadius = Mathf.CeilToInt(checkRadius / GridSize);
+                    
+                    for (int x = -gridRadius; x <= gridRadius; x++)
+                    {
+                        for (int y = -gridRadius; y <= gridRadius; y++)
+                        {
+                            for (int z = -gridRadius; z <= gridRadius; z++)
+                            {
+                                Vector3 checkPos = key + new Vector3(x * GridSize, y * GridSize, z * GridSize);
+                                float distance = Vector3.Distance(key, checkPos);
+                                
+                                if (distance <= checkRadius && 
+                                    sharedObstacleData.ContainsKey(checkPos) && 
+                                    sharedObstacleData[checkPos])
+                                {
+                                    isObstacle = true;
+                                    break;
+                                }
+                            }
+                            if (isObstacle) break;
+                        }
+                        if (isObstacle) break;
+                    }
                 }
             }
             else
             {
                 // 메인 스레드에서는 Physics API 사용
-            Vector3[] directions = new Vector3[]
-            {
-                Vector3.forward,
-                Vector3.back,
-                Vector3.left,
-                Vector3.right,
-                Vector3.up,
-                Vector3.down
-            };
-
-            float checkRadius = Radius * obstacleAvoidanceMargin;
-            for (int i = 0; i < directions.Length; i++)
-            {
-                Vector3 dir = directions[i];
-
-                if (Physics.Raycast(key, dir, out RaycastHit hit, 1f, obstacleLayerMask))
+                float checkRadius = Radius + obstacleAvoidanceMargin;
+                
+                // OverlapSphere를 사용하여 반지름을 고려한 충돌 검사
+                Collider[] overlaps = Physics.OverlapSphere(key, checkRadius, obstacleLayerMask);
+                if (overlaps.Length > 0)
                 {
-                        isObstacle = true;
-                        break;
+                    isObstacle = true;
                 }
+                else
+                {
+                    // 추가로 여러 방향으로 SphereCast 수행
+                    Vector3[] directions = new Vector3[]
+                    {
+                        Vector3.forward,
+                        Vector3.back,
+                        Vector3.left,
+                        Vector3.right,
+                        Vector3.up,
+                        Vector3.down
+                    };
+
+                    for (int i = 0; i < directions.Length; i++)
+                    {
+                        Vector3 dir = directions[i];
+                        
+                        // SphereCast로 파이프 반지름을 고려한 충돌 검사
+                        if (Physics.SphereCast(key, Radius, dir, out RaycastHit hit, GridSize, obstacleLayerMask))
+                        {
+                            isObstacle = true;
+                            break;
+                        }
+                    }
                 }
-                }
+            }
 
             // 결과 캐싱
             obstacleCache[key] = isObstacle;
