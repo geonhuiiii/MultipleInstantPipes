@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using System.Linq;
 using System;
+using System.Threading.Tasks;
 
 namespace InstantPipes
 {
@@ -729,55 +730,359 @@ namespace InstantPipes
             //Debug.Log("All pipes cleared");
         }
 
-        // 다중 파이프 생성 메서드
-        
-        public float AddMultiplePipes(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
+        // 다중 파이프 생성 메서드 (파이프 간 충돌 방지)
+        public async System.Threading.Tasks.Task<float> AddMultiplePipesAsync(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
         {
-            float shortestPathValue = 0f;
-            // 설정 업데이트
-            UpdateMultiPathCreatorSettings();
-
-            MultiPathCreator.hasCollision = false;
-
-            // 파이프 끝점에 임시 충돌체 생성 (경로 탐색용)
-            var temporaryColliders = new List<GameObject>();
-            // 각 파이프의 시작점과 끝점에 임시 충돌체 생성
-            foreach (var config in pipeConfigs)
+            float totalPathLength = 0f;
+            
+            if (pipeConfigs == null || pipeConfigs.Count == 0)
             {
-                temporaryColliders.Add(CreateTemporaryCollider(config.startPoint, config.startNormal));
-                temporaryColliders.Add(CreateTemporaryCollider(config.endPoint, config.endNormal));
-            }
-
-
-            // MultiPathCreator에 전달할 형식으로 변환
-            var configs = pipeConfigs.Select(config =>
-                (config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius, config.material)
-            ).ToList();
-            var shortestA = new List<int>();
-            var aaaa = 0;
-            foreach (var config in configs)
-            {
-                AddPipe(config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius, config.material);
-            }
-            bool isCollided = MultiPathCreator.hasCollision;
-
-            var shortestPaths = configs;
-            for (int j = 0; j < Pipes.Count; j++)
-            {
-                var path = Pipes[j].Points;
-                shortestPathValue += CalculatePathLength(path);
+                Debug.LogWarning("[PipeGenerator] 파이프 설정이 없습니다.");
+                return 0f;
             }
             
-            Pipes.Clear();
-            if (isCollided)
-                Debug.Log($"총 경로 중 충돌발생!.");
-
-            foreach (var collider in temporaryColliders)
+            Debug.Log($"[PipeGenerator] 다중 파이프 생성 시작: {pipeConfigs.Count}개 파이프");
+            
+            // 설정 업데이트
+            UpdateMultiPathCreatorSettings();
+            
+            // 파이프 끝점에 임시 충돌체 생성 (메인 스레드)
+            var temporaryColliders = new List<GameObject>();
+            try
             {
-                if (collider != null) UnityEngine.Object.DestroyImmediate(collider);
+                // 각 파이프의 시작점과 끝점에 임시 충돌체 생성
+                foreach (var config in pipeConfigs)
+                {
+                    temporaryColliders.Add(CreateTemporaryCollider(config.startPoint, config.startNormal));
+                    temporaryColliders.Add(CreateTemporaryCollider(config.endPoint, config.endNormal));
+                }
+                
+                // MultiThreadPathFinder 인스턴스 생성
+                var pathFinder = new MultiThreadPathFinder(maxConcurrentTasks: 4);
+                
+                // 성능 설정 전달
+                pathFinder.SetPerformanceSettings(
+                    MaxIterations,
+                    30, // 30초 타임아웃
+                    100, // 축당 최대 노드 수
+                    50000 // 총 최대 노드 수
+                );
+                
+                // 장애물 데이터 초기화 (메인 스레드에서)
+                Vector3 center = Vector3.zero;
+                if (pipeConfigs.Count > 0)
+                {
+                    center = (pipeConfigs[0].startPoint + pipeConfigs[0].endPoint) * 0.5f;
+                }
+                pathFinder.InitializeObstacleData(center, 1000f, -1, GridSize);
+                
+                // 파이프 요청 생성 및 추가
+                for (int i = 0; i < pipeConfigs.Count; i++)
+                {
+                    var config = pipeConfigs[i];
+                    var request = new PathRequest(
+                        i, 
+                        config.startPoint, 
+                        config.startNormal, 
+                        config.endPoint, 
+                        config.endNormal, 
+                        config.radius > 0 ? config.radius : Radius
+                    );
+                    pathFinder.AddRequest(request);
+                }
+                
+                Debug.Log("[PipeGenerator] 경로 탐색 요청 추가 완료");
+                
+                // 비동기 경로 탐색 실행
+                await pathFinder.ProcessInitialPathsAsync();
+                await pathFinder.ProcessPriorityPathsAsync();
+                
+                Debug.Log("[PipeGenerator] 경로 탐색 완료, 파이프 생성 시작");
+                
+                // 결과를 바탕으로 파이프 생성 (메인 스레드에서)
+                var results = pathFinder.GetAllResults();
+                int successCount = 0;
+                int collisionCount = 0;
+                
+                // 기존 파이프들 정리
+                Pipes.Clear();
+                PipeMaterials.Clear();
+                PipeRadiuses.Clear();
+                
+                for (int i = 0; i < pipeConfigs.Count; i++)
+                {
+                    var result = results.GetValueOrDefault(i);
+                    var config = pipeConfigs[i];
+                    
+                    if (result != null && result.success && result.path != null && result.path.Count > 0)
+                    {
+                        // 파이프 생성
+                        Pipes.Add(new Pipe(result.path));
+                        
+                        // 반지름 설정
+                        PipeRadiuses.Add(config.radius > 0 ? config.radius : Radius);
+                        
+                        // 재질 설정
+                        if (config.material != null)
+                        {
+                            // 재질 복사 (인스턴스 생성)
+                            Shader shaderToUse = config.material.shader ?? Shader.Find("Universal Render Pipeline/Simple Lit");
+                            Material newMaterial = new Material(shaderToUse);
+                            newMaterial.name = $"Pipe_{i}_Material";
+                            newMaterial.CopyPropertiesFromMaterial(config.material);
+                            
+                            // URP 속성 설정
+                            if (newMaterial.HasProperty("_BaseColor") && config.material.HasProperty("_BaseColor"))
+                            {
+                                newMaterial.SetColor("_BaseColor", config.material.GetColor("_BaseColor"));
+                                
+                                if (newMaterial.HasProperty("_EmissionColor"))
+                                {
+                                    newMaterial.EnableKeyword("_EMISSION");
+                                    newMaterial.SetColor("_EmissionColor", config.material.GetColor("_BaseColor") * 0.5f);
+                                }
+                            }
+                            
+                            PipeMaterials.Add(newMaterial);
+                        }
+                        else
+                        {
+                            PipeMaterials.Add(null);
+                        }
+                        
+                        // 경로 길이 계산
+                        totalPathLength += CalculatePathLength(result.path);
+                        successCount++;
+                        
+                        if (result.hasCollision)
+                        {
+                            collisionCount++;
+                        }
+                        
+                        Debug.Log($"[PipeGenerator] 파이프 {i} 생성 성공 (포인트: {result.path.Count}개, 충돌: {result.hasCollision})");
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[PipeGenerator] 파이프 {i} 생성 실패");
+                        
+                        // 실패한 파이프도 빈 슬롯 유지
+                        PipeRadiuses.Add(config.radius > 0 ? config.radius : Radius);
+                        PipeMaterials.Add(null);
+                    }
+                }
+                
+                // 메시 업데이트
+                UpdateMesh();
+                
+                Debug.Log($"[PipeGenerator] 다중 파이프 생성 완료 - 성공: {successCount}/{pipeConfigs.Count}, 충돌: {collisionCount}, 총 길이: {totalPathLength:F2}");
+                
+                // 충돌 발생 알림
+                if (collisionCount > 0)
+                {
+                    Debug.LogWarning($"[PipeGenerator] {collisionCount}개 파이프에서 충돌 발생!");
+                }
+                
+                return totalPathLength;
             }
-            return shortestPathValue;
+            finally
+            {
+                // 임시 충돌체 정리
+                foreach (var collider in temporaryColliders)
+                {
+                    if (collider != null) UnityEngine.Object.DestroyImmediate(collider);
+                }
+            }
         }
+        
+        // 기존 동기 버전 (호환성 유지)
+        public float AddMultiplePipes(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
+        {
+            try
+            {
+                // Unity 메인 스레드에서 직접 실행 (동기적 버전)
+                return AddMultiplePipesSync(pipeConfigs);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"[PipeGenerator] 다중 파이프 생성 중 오류: {ex.Message}");
+                return 0f;
+            }
+        }
+        
+        // 동기적 다중 파이프 생성 (Unity 메인 스레드 안전)
+        private float AddMultiplePipesSync(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
+        {
+            float totalPathLength = 0f;
+            
+            if (pipeConfigs == null || pipeConfigs.Count == 0)
+            {
+                Debug.LogWarning("[PipeGenerator] 파이프 설정이 없습니다.");
+                return 0f;
+            }
+            
+            Debug.Log($"[PipeGenerator] 다중 파이프 생성 시작 (동기): {pipeConfigs.Count}개 파이프");
+            
+            // 설정 업데이트
+            UpdateMultiPathCreatorSettings();
+            
+            // 파이프 끝점에 임시 충돌체 생성
+            var temporaryColliders = new List<GameObject>();
+            try
+            {
+                // 각 파이프의 시작점과 끝점에 임시 충돌체 생성
+                foreach (var config in pipeConfigs)
+                {
+                    temporaryColliders.Add(CreateTemporaryCollider(config.startPoint, config.startNormal));
+                    temporaryColliders.Add(CreateTemporaryCollider(config.endPoint, config.endNormal));
+                }
+                
+                // MultiThreadPathFinder 인스턴스 생성
+                var pathFinder = new MultiThreadPathFinder(maxConcurrentTasks: 1); // 동기 처리를 위해 1개만 사용
+                
+                // 성능 설정 전달
+                pathFinder.SetPerformanceSettings(
+                    MaxIterations,
+                    30, // 30초 타임아웃
+                    100, // 축당 최대 노드 수
+                    50000 // 총 최대 노드 수
+                );
+                
+                // 장애물 데이터 초기화
+                Vector3 center = Vector3.zero;
+                if (pipeConfigs.Count > 0)
+                {
+                    center = (pipeConfigs[0].startPoint + pipeConfigs[0].endPoint) * 0.5f;
+                }
+                pathFinder.InitializeObstacleData(center, 1000f, -1, GridSize);
+                
+                // 파이프 요청 생성 및 추가
+                for (int i = 0; i < pipeConfigs.Count; i++)
+                {
+                    var config = pipeConfigs[i];
+                    var request = new PathRequest(
+                        i, 
+                        config.startPoint, 
+                        config.startNormal, 
+                        config.endPoint, 
+                        config.endNormal, 
+                        config.radius > 0 ? config.radius : Radius
+                    );
+                    pathFinder.AddRequest(request);
+                }
+                
+                Debug.Log("[PipeGenerator] 경로 탐색 요청 추가 완료 (동기)");
+                
+                // 동기적으로 경로 탐색 실행 (Unity 메인 스레드에서)
+                var initialTask = pathFinder.ProcessInitialPathsAsync();
+                while (!initialTask.IsCompleted)
+                {
+                    // Unity 메인 스레드가 블록되지 않도록 짧게 대기
+                    System.Threading.Thread.Sleep(1);
+                }
+                
+                var priorityTask = pathFinder.ProcessPriorityPathsAsync();
+                while (!priorityTask.IsCompleted)
+                {
+                    System.Threading.Thread.Sleep(1);
+                }
+                
+                Debug.Log("[PipeGenerator] 경로 탐색 완료, 파이프 생성 시작 (동기)");
+                
+                // 결과를 바탕으로 파이프 생성
+                var results = pathFinder.GetAllResults();
+                int successCount = 0;
+                int collisionCount = 0;
+                
+                // 기존 파이프들 정리
+                Pipes.Clear();
+                PipeMaterials.Clear();
+                PipeRadiuses.Clear();
+                
+                for (int i = 0; i < pipeConfigs.Count; i++)
+                {
+                    var result = results.GetValueOrDefault(i);
+                    var config = pipeConfigs[i];
+                    
+                    if (result != null && result.success && result.path != null && result.path.Count > 0)
+                    {
+                        // 파이프 생성
+                        Pipes.Add(new Pipe(result.path));
+                        
+                        // 반지름 설정
+                        PipeRadiuses.Add(config.radius > 0 ? config.radius : Radius);
+                        
+                        // 재질 설정
+                        if (config.material != null)
+                        {
+                            // 재질 복사 (인스턴스 생성)
+                            Shader shaderToUse = config.material.shader ?? Shader.Find("Universal Render Pipeline/Simple Lit");
+                            Material newMaterial = new Material(shaderToUse);
+                            newMaterial.name = $"Pipe_{i}_Material";
+                            newMaterial.CopyPropertiesFromMaterial(config.material);
+                            
+                            // URP 속성 설정
+                            if (newMaterial.HasProperty("_BaseColor") && config.material.HasProperty("_BaseColor"))
+                            {
+                                newMaterial.SetColor("_BaseColor", config.material.GetColor("_BaseColor"));
+                                
+                                if (newMaterial.HasProperty("_EmissionColor"))
+                                {
+                                    newMaterial.EnableKeyword("_EMISSION");
+                                    newMaterial.SetColor("_EmissionColor", config.material.GetColor("_BaseColor") * 0.5f);
+                                }
+                            }
+                            
+                            PipeMaterials.Add(newMaterial);
+                        }
+                        else
+                        {
+                            PipeMaterials.Add(null);
+                        }
+                        
+                        // 경로 길이 계산
+                        totalPathLength += CalculatePathLength(result.path);
+                        successCount++;
+                        
+                        if (result.hasCollision)
+                        {
+                            collisionCount++;
+                        }
+                        
+                        Debug.Log($"[PipeGenerator] 파이프 {i} 생성 성공 (포인트: {result.path.Count}개, 충돌: {result.hasCollision})");
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[PipeGenerator] 파이프 {i} 생성 실패");
+                        
+                        // 실패한 파이프도 빈 슬롯 유지
+                        PipeRadiuses.Add(config.radius > 0 ? config.radius : Radius);
+                        PipeMaterials.Add(null);
+                    }
+                }
+                
+                // 메시 업데이트
+                UpdateMesh();
+                
+                Debug.Log($"[PipeGenerator] 다중 파이프 생성 완료 (동기) - 성공: {successCount}/{pipeConfigs.Count}, 충돌: {collisionCount}, 총 길이: {totalPathLength:F2}");
+                
+                // 충돌 발생 알림
+                if (collisionCount > 0)
+                {
+                    Debug.LogWarning($"[PipeGenerator] {collisionCount}개 파이프에서 충돌 발생!");
+                }
+                
+                return totalPathLength;
+            }
+            finally
+            {
+                // 임시 충돌체 정리
+                foreach (var collider in temporaryColliders)
+                {
+                    if (collider != null) UnityEngine.Object.DestroyImmediate(collider);
+                }
+            }
+        }
+
         // 경로 시각화 업데이트
         public void UpdatePathVisualization()
         {

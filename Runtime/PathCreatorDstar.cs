@@ -57,6 +57,9 @@ namespace InstantPipes
         private readonly object obstacleDataLock = new object();
         private readonly List<PathRequest> allRequests = new(); // 모든 요청을 순서대로 저장
         private readonly object requestsLock = new object();
+        // 생성된 파이프 경로들을 저장 (파이프 간 충돌 방지용)
+        private readonly List<List<Vector3>> createdPipePaths = new();
+        private readonly object pipePathsLock = new object();
         private bool isInitialized = false;
         
         // 성능 설정 필드들
@@ -76,6 +79,12 @@ namespace InstantPipes
             lock (obstacleDataLock)
             {
                 sharedObstacleData.Clear();
+                
+                // 생성된 파이프 경로들도 초기화
+                lock (pipePathsLock)
+                {
+                    createdPipePaths.Clear();
+                }
                 
                 Collider[] hits = Physics.OverlapSphere(center, range, layerMask);
                 foreach (var hit in hits)
@@ -101,6 +110,44 @@ namespace InstantPipes
             }
         }
         
+        // 생성된 파이프 경로를 장애물로 추가
+        private void AddPipePathAsObstacle(List<Vector3> pipePath, float gridSize, float pipeRadius)
+        {
+            if (pipePath == null || pipePath.Count == 0) return;
+            
+            lock (obstacleDataLock)
+            {
+                foreach (var point in pipePath)
+                {
+                    Vector3 basePos = SnapToGrid(point, gridSize);
+                    
+                    // 파이프 반지름을 고려한 안전 거리 계산
+                    float safetyMargin = pipeRadius * 2.5f; // 안전 마진 증가
+                    int gridSteps = Mathf.CeilToInt(safetyMargin / gridSize);
+                    
+                    // 파이프 주변 그리드들을 장애물로 추가
+                    for (int x = -gridSteps; x <= gridSteps; x++)
+                    {
+                        for (int y = -gridSteps; y <= gridSteps; y++)
+                        {
+                            for (int z = -gridSteps; z <= gridSteps; z++)
+                            {
+                                Vector3 obstaclePos = basePos + new Vector3(x * gridSize, y * gridSize, z * gridSize);
+                                
+                                // 거리 체크로 원형 영역만 장애물로 설정
+                                if (Vector3.Distance(basePos, obstaclePos) <= safetyMargin)
+                                {
+                                    sharedObstacleData[obstaclePos] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            Debug.Log($"[멀티스레딩] 파이프 경로 장애물 추가 완료: {pipePath.Count}개 포인트, 반지름: {pipeRadius}");
+        }
+        
         public bool IsObstacleThreadSafe(Vector3 position, float gridSize)
         {
             if (!isInitialized) return false;
@@ -124,7 +171,7 @@ namespace InstantPipes
             }
         }
         
-        // 모든 요청에 대해 초기 경로 탐색 (병렬)
+        // 모든 요청에 대해 초기 경로 탐색 (병렬) - 충돌 미고려 빠른 탐색
         public async Task ProcessInitialPathsAsync()
         {
             var tasks = new List<Task>();
@@ -136,9 +183,9 @@ namespace InstantPipes
                 requests.Add(request);
             }
             
-            Debug.Log($"[멀티스레딩] 초기 경로 탐색 시작: {requests.Count}개 파이프");
+            Debug.Log($"[멀티스레딩] 초기 경로 탐색 시작: {requests.Count}개 파이프 (병렬)");
             
-            // 병렬로 초기 경로 탐색
+            // 병렬로 초기 경로 탐색 (빠른 대략적 경로)
             foreach (var request in requests)
             {
                 tasks.Add(ProcessSingleRequestAsync(request, isInitialPass: true));
@@ -148,7 +195,7 @@ namespace InstantPipes
             Debug.Log("[멀티스레딩] 초기 경로 탐색 완료");
         }
         
-        // 순서대로 순차 경로 탐색
+        // 순서대로 순차 경로 탐색 (파이프 간 충돌 고려)
         public async Task ProcessPriorityPathsAsync()
         {
             List<PathRequest> orderedRequests;
@@ -159,18 +206,41 @@ namespace InstantPipes
                 orderedRequests = new List<PathRequest>(allRequests);
             }
             
-            Debug.Log($"[멀티스레딩] 순차 경로 탐색 시작: {orderedRequests.Count}개 파이프 (순서대로)");
+            Debug.Log($"[멀티스레딩] 순차 경로 탐색 시작: {orderedRequests.Count}개 파이프 (순서대로, 충돌 고려)");
             
-            // 순서대로 처리 (실패한 파이프 또는 추가 최적화가 필요한 경우)
-            foreach (var request in orderedRequests)
+            // 순서대로 처리하면서 이전 파이프들을 장애물로 추가
+            for (int i = 0; i < orderedRequests.Count; i++)
             {
-                var existingResult = completedResults.GetValueOrDefault(request.pipeId);
+                var request = orderedRequests[i];
                 
-                // 실패했거나 추가 최적화가 필요한 경우 재처리
-                if (existingResult == null || !existingResult.success)
+                Debug.Log($"[멀티스레딩] 파이프 {request.pipeId} 순차 처리 중 (진행: {i+1}/{orderedRequests.Count})");
+                
+                // 이전에 생성된 파이프들의 경로를 장애물로 추가
+                lock (pipePathsLock)
                 {
-                    Debug.Log($"[멀티스레딩] 파이프 {request.pipeId} 순차 최적화 처리");
-                    await ProcessSingleRequestAsync(request, isInitialPass: false);
+                    foreach (var existingPath in createdPipePaths)
+                    {
+                        AddPipePathAsObstacle(existingPath, 3f, request.pipeRadius); // GridSize 기본값 3f 사용
+                    }
+                }
+                
+                // 순차 처리로 정확한 경로 탐색
+                await ProcessSingleRequestAsync(request, isInitialPass: false);
+                
+                // 성공한 경로를 저장 (다음 파이프의 장애물로 사용)
+                var result = completedResults.GetValueOrDefault(request.pipeId);
+                if (result != null && result.success && result.path != null && result.path.Count > 0)
+                {
+                    lock (pipePathsLock)
+                    {
+                        createdPipePaths.Add(new List<Vector3>(result.path));
+                    }
+                    
+                    Debug.Log($"[멀티스레딩] 파이프 {request.pipeId} 경로 저장 완료 (포인트: {result.path.Count}개)");
+                }
+                else
+                {
+                    Debug.LogWarning($"[멀티스레딩] 파이프 {request.pipeId} 경로 생성 실패");
                 }
             }
             
@@ -189,7 +259,21 @@ namespace InstantPipes
                     pathCreator.SetObstacleDataFromShared(sharedObstacleData, obstacleDataLock);
                     
                     // 성능 설정 전달
-                    pathCreator.SetPerformanceSettings(maxIterations, maxTimeoutSeconds, maxNodesPerAxis, maxTotalNodes);
+                    if (isInitialPass)
+                    {
+                        // 초기 탐색: 빠른 설정
+                        pathCreator.SetPerformanceSettings(
+                            maxIterations / 2, // 반복 횟수 절반
+                            maxTimeoutSeconds / 2, // 타임아웃 절반
+                            maxNodesPerAxis, 
+                            maxTotalNodes / 2 // 노드 수 절반
+                        );
+                    }
+                    else
+                    {
+                        // 순차 탐색: 정확한 설정
+                        pathCreator.SetPerformanceSettings(maxIterations, maxTimeoutSeconds, maxNodesPerAxis, maxTotalNodes);
+                    }
                     
                     // 디버그 설정 전달 (기본적으로 false - 성능 최적화)
                     pathCreator.SetDebugSettings(false);
@@ -220,7 +304,7 @@ namespace InstantPipes
                     completedResults.AddOrUpdate(request.pipeId, result, (key, oldValue) => result);
                     
                     string passType = isInitialPass ? "초기" : "순차";
-                    Debug.Log($"[멀티스레딩] {passType} 경로 탐색 완료 - ID: {request.pipeId}, 성공: {result.success}");
+                    Debug.Log($"[멀티스레딩] {passType} 경로 탐색 완료 - ID: {request.pipeId}, 성공: {result.success}, 포인트: {path?.Count ?? 0}개");
                 });
             }
             finally
@@ -244,11 +328,19 @@ namespace InstantPipes
         {
             completedResults.Clear();
             
-            // 요청 리스트도 함께 지우기
+            // 요청 리스트와 생성된 파이프 경로들도 함께 지우기
             lock (requestsLock)
             {
                 allRequests.Clear();
             }
+            
+            lock (pipePathsLock)
+            {
+                createdPipePaths.Clear();
+            }
+            
+            // 장애물 데이터도 초기화 (기본 장애물은 유지)
+            InitializeObstacleData(Vector3.zero, 1000f, -1, 3f);
         }
         
         private static Vector3 SnapToGrid(Vector3 pos, float gridSize)
@@ -266,6 +358,15 @@ namespace InstantPipes
             maxTimeoutSeconds = maxTimeout;
             maxNodesPerAxis = maxNodes;
             maxTotalNodes = maxTotal;
+        }
+        
+        // 생성된 파이프 경로 개수 반환 (디버깅용)
+        public int GetCreatedPipePathsCount()
+        {
+            lock (pipePathsLock)
+            {
+                return createdPipePaths.Count;
+            }
         }
     }
 
