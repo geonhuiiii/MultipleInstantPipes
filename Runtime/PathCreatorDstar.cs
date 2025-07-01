@@ -627,10 +627,8 @@ namespace InstantPipes
         {
             if (IsObstacle(b))
             {
-                if (strictObstacleAvoidance)
-                    return Mathf.Infinity;
-
-                return NearObstaclesPriority;
+                // strictObstacleAvoidance가 true여도 Infinity 대신 높은 비용 반환
+                return NearObstaclesPriority * (strictObstacleAvoidance ? 10f : 1f);
             }
             return 1;
         }
@@ -1050,11 +1048,9 @@ namespace InstantPipes
                     float cost = Cost(u, s);
                     float g_s = GetNode(s).g;
 
-                    if (cost != Mathf.Infinity) // 무한대 비용이 아닌 경우만 고려
-                    {
+                    // 모든 비용을 고려 (Infinity 체크 제거)
                     float total = cost + g_s;
                     if (total < minRhs) minRhs = total;
-                    }
                 }
 
                 uNode.rhs = minRhs;
@@ -1091,7 +1087,7 @@ namespace InstantPipes
                 var startKey = CalculateKey(start);
                 var startNode = GetNode(start);
                 
-                // 종료 조건: start 노드가 consistent하고(g == rhs) key가 start보다 크거나 같으면 종료
+                // 원래 종료 조건: start 노드가 consistent하고 key 조건을 만족하면 종료
                 if ((CompareKey(currentKey, startKey) >= 0) && 
                     (Mathf.Abs(startNode.g - startNode.rhs) < 0.001f))
                 {
@@ -1160,7 +1156,8 @@ namespace InstantPipes
                 {
                     float cost = Cost(current, s) + GetNode(s).g;
                     
-                    if (cost < min && cost != Mathf.Infinity)
+                    // Infinity 체크 제거 - 모든 비용 고려
+                    if (cost < min)
                     {
                         min = cost;
                         next = s;
@@ -1168,7 +1165,7 @@ namespace InstantPipes
                     }
                 }
 
-                if (!foundValidNeighbor || min == Mathf.Infinity || AreEqual(next, current))
+                if (!foundValidNeighbor || AreEqual(next, current))
                 {
                     return null; // No path
                 }
