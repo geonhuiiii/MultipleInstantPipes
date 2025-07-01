@@ -163,6 +163,55 @@ namespace InstantPipes
             }
         }
         
+        // 파이프 경로를 장애물로 추가
+        public void AddPipePathAsObstacle(List<Vector3> path, float pipeRadius)
+        {
+            if (path == null || path.Count == 0) return;
+            
+            lock (obstacleDataLock)
+            {
+                foreach (var point in path)
+                {
+                    // 파이프 중심점을 장애물로 추가
+                    Vector3 centerPos = SnapToGrid(point, currentGridSize);
+                    sharedObstacleData[centerPos] = true;
+                    
+                    // 파이프 반지름 고려해서 주변 그리드도 장애물로 추가
+                    float obstacleRadius = pipeRadius * 1.5f; // 약간의 안전 마진
+                    int gridRadius = Mathf.CeilToInt(obstacleRadius / currentGridSize);
+                    
+                    for (int x = -gridRadius; x <= gridRadius; x++)
+                    {
+                        for (int y = -gridRadius; y <= gridRadius; y++)
+                        {
+                            for (int z = -gridRadius; z <= gridRadius; z++)
+                            {
+                                Vector3 offset = new Vector3(x * currentGridSize, y * currentGridSize, z * currentGridSize);
+                                Vector3 obstaclePos = SnapToGrid(centerPos + offset, currentGridSize);
+                                
+                                // 실제 거리 체크
+                                if (Vector3.Distance(centerPos, obstaclePos) <= obstacleRadius)
+                                {
+                                    sharedObstacleData[obstaclePos] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                Debug.Log($"[멀티스레딩] 파이프 경로를 장애물로 추가: {path.Count}개 점, 반지름: {pipeRadius}");
+            }
+        }
+        
+        // 장애물 데이터 통계
+        public int GetObstacleCount()
+        {
+            lock (obstacleDataLock)
+            {
+                return sharedObstacleData.Count;
+            }
+        }
+        
         // 경로 요청 추가
         public void AddRequest(PathRequest request)
         {
@@ -218,16 +267,37 @@ namespace InstantPipes
             // 그리드 범위 재계산 (순차 처리 전에)
             CalculateGridBounds(currentGridSize);
             
-            // 순서대로 처리 (실패한 파이프 또는 추가 최적화가 필요한 경우)
-            foreach (var request in orderedRequests)
+            // 순서대로 처리하며 이전 파이프들을 장애물로 추가
+            for (int i = 0; i < orderedRequests.Count; i++)
             {
+                var request = orderedRequests[i];
                 var existingResult = completedResults.GetValueOrDefault(request.pipeId);
                 
-                // 실패했거나 추가 최적화가 필요한 경우 재처리
+                // 이전 파이프들의 경로를 장애물로 추가
+                for (int j = 0; j < i; j++)
+                {
+                    var prevRequest = orderedRequests[j];
+                    var prevResult = completedResults.GetValueOrDefault(prevRequest.pipeId);
+                    
+                    if (prevResult != null && prevResult.success && prevResult.path.Count > 2)
+                    {
+                        // 시작점과 끝점 제외한 중간 경로만 장애물로 추가
+                        var pathWithoutEndpoints = prevResult.path.Skip(1).Take(prevResult.path.Count - 2).ToList();
+                        AddPipePathAsObstacle(pathWithoutEndpoints, prevRequest.pipeRadius);
+                        
+                        Debug.Log($"[멀티스레딩] 파이프 {prevRequest.pipeId}의 경로를 장애물로 추가 (파이프 {request.pipeId} 처리용)");
+                    }
+                }
+                
+                // 현재 파이프 처리 (실패했거나 추가 최적화가 필요한 경우)
                 if (existingResult == null || !existingResult.success)
                 {
-                    Debug.Log($"[멀티스레딩] 파이프 {request.pipeId} 순차 최적화 처리");
+                    Debug.Log($"[멀티스레딩] 파이프 {request.pipeId} 순차 최적화 처리 (장애물 수: {GetObstacleCount()})");
                     await ProcessSingleRequestAsync(request, isInitialPass: false);
+                }
+                else
+                {
+                    Debug.Log($"[멀티스레딩] 파이프 {request.pipeId} 이미 성공적으로 처리됨, 건너뜀");
                 }
             }
             

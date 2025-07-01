@@ -110,7 +110,7 @@ namespace InstantPipes
         /// <summary>
         /// 모든 파이프의 경로를 탐색합니다.
         /// 1단계: 모든 파이프가 동시에 초기 경로 탐색
-        /// 2단계: 추가된 순서대로 순차 경로 탐색
+        /// 2단계: 추가된 순서대로 순차 경로 탐색 (이전 파이프들을 장애물로 고려)
         /// </summary>
         public async Task ProcessAllPipesAsync()
         {
@@ -123,10 +123,13 @@ namespace InstantPipes
             try
             {
                 if (enableDebugLogs)
-                    Debug.Log("[파이프 매니저] 경로 탐색 시작");
+                    Debug.Log($"[파이프 매니저] 경로 탐색 시작 - 초기 장애물 수: {pathFinder.GetObstacleCount()}");
                 
                 // 1단계: 모든 파이프가 동시에 초기 경로 탐색
                 await pathFinder.ProcessInitialPathsAsync();
+                
+                if (enableDebugLogs)
+                    Debug.Log($"[파이프 매니저] 1단계 완료 - 장애물 수: {pathFinder.GetObstacleCount()}");
                 
                 // 2단계: 추가된 순서대로 순차 경로 탐색
                 await pathFinder.ProcessPriorityPathsAsync();
@@ -135,11 +138,19 @@ namespace InstantPipes
                 {
                     var results = pathFinder.GetAllResults();
                     int successCount = 0;
+                    int collisionCount = 0;
+                    
                     foreach (var result in results.Values)
                     {
-                        if (result.success) successCount++;
+                        if (result.success) 
+                        {
+                            successCount++;
+                            if (result.hasCollision) collisionCount++;
+                        }
                     }
-                    Debug.Log($"[파이프 매니저] 경로 탐색 완료 - 성공: {successCount}/{results.Count}");
+                    
+                    Debug.Log($"[파이프 매니저] 경로 탐색 완료 - 성공: {successCount}/{results.Count}, " +
+                             $"충돌: {collisionCount}개, 최종 장애물 수: {pathFinder.GetObstacleCount()}");
                 }
             }
             catch (Exception ex)
@@ -187,6 +198,28 @@ namespace InstantPipes
                 pathFinder.ClearResults();
                 if (enableDebugLogs)
                     Debug.Log("[파이프 매니저] 모든 결과 지움");
+            }
+        }
+        
+        /// <summary>
+        /// 현재 장애물 수를 반환합니다.
+        /// </summary>
+        public int GetObstacleCount()
+        {
+            if (!isInitialized) return 0;
+            return pathFinder.GetObstacleCount();
+        }
+        
+        /// <summary>
+        /// 파이프 경로를 수동으로 장애물로 추가합니다.
+        /// </summary>
+        public void AddPipeAsObstacle(List<Vector3> path, float radius)
+        {
+            if (isInitialized && path != null && path.Count > 0)
+            {
+                pathFinder.AddPipePathAsObstacle(path, radius);
+                if (enableDebugLogs)
+                    Debug.Log($"[파이프 매니저] 수동으로 파이프 경로를 장애물로 추가: {path.Count}개 점");
             }
         }
         
