@@ -66,12 +66,15 @@ namespace InstantPipes
         [Tooltip("장애물 검색 범위 (그리드 크기에 따라 자동 조정)")]
         public float obstacleSearchRangeMultiplier = 1.5f;
 
+        // 호환성을 위한 searchRange 프로퍼티
+        [System.Obsolete("Use GetCurrentSearchRange() method instead")]
+        public float searchRange => GetCurrentSearchRange();
+
         private Renderer _renderer;
         private MeshCollider _collider;
         private Mesh _mesh;
 
         public List<Pipe> Pipes = new List<Pipe>();
-        public PathCreatorDstar MultiPathCreator = new PathCreatorDstar();
         private float _maxDistanceBetweenPoints;
         public float MaxCurvature => _maxDistanceBetweenPoints / 2;
 
@@ -87,22 +90,7 @@ namespace InstantPipes
             GetComponent<MeshFilter>().sharedMesh = _mesh;
             _collider.sharedMesh = _mesh;
 
-            // MultiPathCreator 기본 파라미터 설정
-            UpdateMultiPathCreatorSettings();
-
             UpdateMesh();
-        }
-
-        // MultiPathCreator 설정 업데이트
-        private void UpdateMultiPathCreatorSettings()
-        {
-            MultiPathCreator.Height = Height;
-            MultiPathCreator.GridSize = GridSize;
-            MultiPathCreator.GridRotationY = GridRotationY;
-            MultiPathCreator.Chaos = Chaos;
-            MultiPathCreator.StraightPathPriority = StraightPathPriority;
-            MultiPathCreator.NearObstaclesPriority = NearObstaclesPriority;
-            MultiPathCreator.MaxIterations = MaxIterations;
         }
 
         public void UpdateMesh()
@@ -356,9 +344,6 @@ namespace InstantPipes
 
         public bool AddPipe(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius = -1, Material material = null)
         {
-            // 설정 업데이트
-            UpdateMultiPathCreatorSettings();
-            
             int newPipeIndex = Pipes.Count;
             
             // 파이프 반경 설정
@@ -439,14 +424,23 @@ namespace InstantPipes
                 
                 PipeMaterials[newPipeIndex] = newMaterial;
                 
-                // MultiPathCreator를 사용하여 단일 파이프 경로 생성
+                // PathCreatorDstar를 사용하여 단일 파이프 경로 생성
                 float pipeRadius = radius > 0 ? radius : Radius;
                 
-                // 다중 경로 생성을 위한 설정 리스트 생성
+                // PathCreatorDstar 인스턴스 생성 및 설정
+                var pathCreator = new PathCreatorDstar();
+                pathCreator.Height = Height;
+                pathCreator.GridSize = GridSize;
+                pathCreator.GridRotationY = GridRotationY;
+                pathCreator.Chaos = Chaos;
+                pathCreator.StraightPathPriority = StraightPathPriority;
+                pathCreator.NearObstaclesPriority = NearObstaclesPriority;
+                pathCreator.MaxIterations = MaxIterations;
+                
+                // 경로 생성
                 bool succ = false;
-                var paths = new List<List<Vector3>>();
-                var path = MultiPathCreator.Create(startPoint, startNormal, endPoint, endNormal, pipeRadius);
-                paths.Add(path);
+                var path = pathCreator.Create(startPoint, startNormal, endPoint, endNormal, pipeRadius);
+                
                 if (path.Count > 0)
                 {
                     // 파이프 생성
@@ -460,7 +454,7 @@ namespace InstantPipes
                 }
                 else
                 {
-                    //Debug.LogWarning("MultiPathCreator에서 경로를 생성하지 못했습니다");
+                    //Debug.LogWarning("PathCreatorDstar에서 경로를 생성하지 못했습니다");
                     succ = false;
                 }
                 
@@ -525,9 +519,6 @@ namespace InstantPipes
 
         public bool RegeneratePaths()
         {
-            // 설정 업데이트
-            UpdateMultiPathCreatorSettings();
-            
             var pipeInfos = new List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius)>();
             var originalPipes = new List<Pipe>(Pipes);
             
@@ -567,10 +558,20 @@ namespace InstantPipes
                     temporaryColliders.Add(CreateTemporaryCollider(info.endPoint, info.endNormal));
                 }
                 bool succ = false;
-                // MultiPathCreator로 모든 경로 재생성
+                // PathCreatorDstar로 모든 경로 재생성
                 foreach (var config in pipeInfos){
+                    // PathCreatorDstar 인스턴스 생성 및 설정
+                    var pathCreator = new PathCreatorDstar();
+                    pathCreator.Height = Height;
+                    pathCreator.GridSize = GridSize;
+                    pathCreator.GridRotationY = GridRotationY;
+                    pathCreator.Chaos = Chaos;
+                    pathCreator.StraightPathPriority = StraightPathPriority;
+                    pathCreator.NearObstaclesPriority = NearObstaclesPriority;
+                    pathCreator.MaxIterations = MaxIterations;
+                    
                     // 경로 생성
-                    var path = MultiPathCreator.Create(config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius);
+                    var path = pathCreator.Create(config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius);
                     
                     if (path.Count > 0)
                     {
@@ -583,7 +584,7 @@ namespace InstantPipes
                     }
                     else
                     {
-                        //Debug.LogWarning("MultiPathCreator에서 경로를 생성하지 못했습니다");
+                        //Debug.LogWarning("PathCreatorDstar에서 경로를 생성하지 못했습니다");
                         succ = false;
                     }
                 }
@@ -763,9 +764,6 @@ namespace InstantPipes
             
             Debug.Log($"[PipeGenerator] 다중 파이프 생성 시작: {pipeConfigs.Count}개 파이프");
             
-            // 설정 업데이트
-            UpdateMultiPathCreatorSettings();
-            
             // 파이프 끝점에 임시 충돌체 생성 (메인 스레드)
             var temporaryColliders = new List<GameObject>();
             try
@@ -943,9 +941,6 @@ namespace InstantPipes
             }
             
             Debug.Log($"[PipeGenerator] 다중 파이프 생성 시작 (동기): {pipeConfigs.Count}개 파이프");
-            
-            // 설정 업데이트
-            UpdateMultiPathCreatorSettings();
             
             // 파이프 끝점에 임시 충돌체 생성
             var temporaryColliders = new List<GameObject>();
@@ -1287,6 +1282,87 @@ namespace InstantPipes
         }
         
         /// <summary>
+        /// 현재 그리드의 검색 범위를 반환
+        /// </summary>
+        public float GetCurrentSearchRange()
+        {
+            if (!useAutomaticGridBounds)
+            {
+                return Mathf.Max(manualGridSize.x, manualGridSize.y, manualGridSize.z) * obstacleSearchRangeMultiplier;
+            }
+            
+            // 기존 파이프들을 기반으로 자동 계산
+            if (Pipes != null && Pipes.Count > 0)
+            {
+                var pipeConfigs = GetCurrentPipeConfigs();
+                if (pipeConfigs.Count > 0)
+                {
+                    var (gridCenter, searchRange) = CalculateOptimalGridBounds(pipeConfigs);
+                    var (validatedCenter, validatedRange) = ValidateAndClampGridBounds(gridCenter, searchRange);
+                    return validatedRange;
+                }
+            }
+            
+            // 기본값 반환
+            return 100f;
+        }
+        
+        /// <summary>
+        /// 현재 그리드의 중심점을 반환
+        /// </summary>
+        public Vector3 GetCurrentGridCenter()
+        {
+            if (!useAutomaticGridBounds)
+            {
+                return manualGridCenter;
+            }
+            
+            // 기존 파이프들을 기반으로 자동 계산
+            if (Pipes != null && Pipes.Count > 0)
+            {
+                var pipeConfigs = GetCurrentPipeConfigs();
+                if (pipeConfigs.Count > 0)
+                {
+                    var (gridCenter, searchRange) = CalculateOptimalGridBounds(pipeConfigs);
+                    var (validatedCenter, validatedRange) = ValidateAndClampGridBounds(gridCenter, searchRange);
+                    return validatedCenter;
+                }
+            }
+            
+            // 기본값 반환
+            return Vector3.zero;
+        }
+        
+        /// <summary>
+        /// 현재 파이프들의 설정을 반환하는 헬퍼 메서드
+        /// </summary>
+        private List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> GetCurrentPipeConfigs()
+        {
+            var pipeConfigs = new List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)>();
+            
+            for (int i = 0; i < Pipes.Count; i++)
+            {
+                var pipe = Pipes[i];
+                if (pipe.Points.Count >= 2)
+                {
+                    Vector3 startPoint = pipe.Points[0];
+                    Vector3 startNormal = (pipe.Points[1] - pipe.Points[0]).normalized;
+                    
+                    int lastIdx = pipe.Points.Count - 1;
+                    Vector3 endPoint = pipe.Points[lastIdx];
+                    Vector3 endNormal = (pipe.Points[lastIdx-1] - pipe.Points[lastIdx]).normalized;
+                    
+                    float radius = i < PipeRadiuses.Count ? PipeRadiuses[i] : Radius;
+                    Material material = i < PipeMaterials.Count ? PipeMaterials[i] : null;
+                    
+                    pipeConfigs.Add((startPoint, startNormal, endPoint, endNormal, radius, material));
+                }
+            }
+            
+            return pipeConfigs;
+        }
+        
+        /// <summary>
         /// Unity Editor에서 그리드 범위 시각화
         /// </summary>
         private void OnDrawGizmosSelected()
@@ -1333,8 +1409,14 @@ namespace InstantPipes
                     
                     // 자동 계산된 그리드 범위 시각화
                     Gizmos.color = Color.green;
+                    // 검색 범위를 기반으로 그리드 크기 계산 (정육면체)
                     Vector3 gridSize = Vector3.one * validatedRange;
                     Gizmos.DrawWireCube(validatedCenter, gridSize);
+                    
+                    // 실제 그리드 영역도 표시 (더 작은 크기)
+                    Gizmos.color = Color.yellow * 0.7f;
+                    Vector3 actualGridSize = Vector3.one * (validatedRange * 0.8f);
+                    Gizmos.DrawWireCube(validatedCenter, actualGridSize);
                     
                     // 파이프 시작/끝점 시각화
                     Gizmos.color = Color.red;
