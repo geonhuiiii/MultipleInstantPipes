@@ -126,7 +126,6 @@ namespace InstantPipes
             var results = pipeManager.GetAllResults();
             
             Debug.Log($"[예시] === 경로 탐색 결과 ({results.Count}개 파이프) ===");
-            Debug.Log($"[예시] 최종 장애물 수: {pipeManager.GetObstacleCount()}");
             
             int successCount = 0;
             int collisionCount = 0;
@@ -151,16 +150,6 @@ namespace InstantPipes
             }
             
             Debug.Log($"[예시] === 요약: 성공 {successCount}/{results.Count}, 충돌 {collisionCount}개 ===");
-            
-            // 파이프들이 서로 회피했는지 분석
-            if (successCount > 1 && collisionCount == 0)
-            {
-                Debug.Log($"[예시] 🎉 모든 파이프가 서로 회피하여 경로를 생성했습니다!");
-            }
-            else if (successCount > 1 && collisionCount > 0)
-            {
-                Debug.Log($"[예시] ⚠️ 일부 파이프에서 충돌이 감지되었습니다. 파이프간 회피가 부분적으로 작동했습니다.");
-            }
         }
         
         /// <summary>
