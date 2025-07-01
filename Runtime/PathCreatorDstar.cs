@@ -62,6 +62,11 @@ namespace InstantPipes
         private readonly object pipePathsLock = new object();
         private bool isInitialized = false;
         
+        // 동적 그리드 설정 저장
+        private float currentGridSize = 3f;
+        private Vector3 currentCenter = Vector3.zero;
+        private float currentRange = 100f;
+        
         // 성능 설정 필드들
         private int maxIterations = 1000;
         private int maxTimeoutSeconds = 30;
@@ -79,6 +84,11 @@ namespace InstantPipes
             lock (obstacleDataLock)
             {
                 sharedObstacleData.Clear();
+                
+                // 동적 그리드 설정 저장
+                currentGridSize = gridSize;
+                currentCenter = center;
+                currentRange = range;
                 
                 // 생성된 파이프 경로들도 초기화
                 lock (pipePathsLock)
@@ -106,7 +116,7 @@ namespace InstantPipes
                 }
                 
                 isInitialized = true;
-                Debug.Log($"[멀티스레딩] 장애물 데이터 초기화 완료: {sharedObstacleData.Count}개 위치");
+                Debug.Log($"[멀티스레딩] 장애물 데이터 초기화 완료: {sharedObstacleData.Count}개 위치 (그리드 크기: {gridSize:F1})");
             }
         }
         
@@ -117,12 +127,14 @@ namespace InstantPipes
             
             lock (obstacleDataLock)
             {
+                int addedObstacles = 0;
+                
                 foreach (var point in pipePath)
                 {
                     Vector3 basePos = SnapToGrid(point, gridSize);
                     
-                    // 파이프 반지름을 고려한 안전 거리 계산
-                    float safetyMargin = pipeRadius * 2.5f; // 안전 마진 증가
+                    // 파이프 반지름을 고려한 안전 거리 계산 (그리드 크기 비례)
+                    float safetyMargin = Mathf.Max(pipeRadius * 2.5f, gridSize * 2f);
                     int gridSteps = Mathf.CeilToInt(safetyMargin / gridSize);
                     
                     // 파이프 주변 그리드들을 장애물로 추가
@@ -137,15 +149,19 @@ namespace InstantPipes
                                 // 거리 체크로 원형 영역만 장애물로 설정
                                 if (Vector3.Distance(basePos, obstaclePos) <= safetyMargin)
                                 {
-                                    sharedObstacleData[obstaclePos] = true;
+                                    if (!sharedObstacleData.ContainsKey(obstaclePos) || !sharedObstacleData[obstaclePos])
+                                    {
+                                        sharedObstacleData[obstaclePos] = true;
+                                        addedObstacles++;
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                
+                Debug.Log($"[멀티스레딩] 파이프 경로 장애물 추가: {pipePath.Count}개 포인트 → {addedObstacles}개 장애물 격자 (반지름: {pipeRadius:F1}, 그리드: {gridSize:F1})");
             }
-            
-            Debug.Log($"[멀티스레딩] 파이프 경로 장애물 추가 완료: {pipePath.Count}개 포인트, 반지름: {pipeRadius}");
         }
         
         public bool IsObstacleThreadSafe(Vector3 position, float gridSize)
@@ -183,7 +199,7 @@ namespace InstantPipes
                 requests.Add(request);
             }
             
-            Debug.Log($"[멀티스레딩] 초기 경로 탐색 시작: {requests.Count}개 파이프 (병렬)");
+            Debug.Log($"[멀티스레딩] 초기 경로 탐색 시작: {requests.Count}개 파이프 (병렬, 그리드 크기: {currentGridSize:F1})");
             
             // 병렬로 초기 경로 탐색 (빠른 대략적 경로)
             foreach (var request in requests)
@@ -206,7 +222,7 @@ namespace InstantPipes
                 orderedRequests = new List<PathRequest>(allRequests);
             }
             
-            Debug.Log($"[멀티스레딩] 순차 경로 탐색 시작: {orderedRequests.Count}개 파이프 (순서대로, 충돌 고려)");
+            Debug.Log($"[멀티스레딩] 순차 경로 탐색 시작: {orderedRequests.Count}개 파이프 (순서대로, 충돌 고려, 그리드 크기: {currentGridSize:F1})");
             
             // 순서대로 처리하면서 이전 파이프들을 장애물로 추가
             for (int i = 0; i < orderedRequests.Count; i++)
@@ -215,12 +231,12 @@ namespace InstantPipes
                 
                 Debug.Log($"[멀티스레딩] 파이프 {request.pipeId} 순차 처리 중 (진행: {i+1}/{orderedRequests.Count})");
                 
-                // 이전에 생성된 파이프들의 경로를 장애물로 추가
+                // 이전에 생성된 파이프들의 경로를 장애물로 추가 (동적 그리드 크기 사용)
                 lock (pipePathsLock)
                 {
                     foreach (var existingPath in createdPipePaths)
                     {
-                        AddPipePathAsObstacle(existingPath, 3f, request.pipeRadius); // GridSize 기본값 3f 사용
+                        AddPipePathAsObstacle(existingPath, currentGridSize, request.pipeRadius);
                     }
                 }
                 
@@ -339,8 +355,11 @@ namespace InstantPipes
                 createdPipePaths.Clear();
             }
             
-            // 장애물 데이터도 초기화 (기본 장애물은 유지)
-            InitializeObstacleData(Vector3.zero, 1000f, -1, 3f);
+            // 장애물 데이터도 초기화 (기본 장애물은 유지하되 동적 그리드 설정 사용)
+            if (isInitialized)
+            {
+                InitializeObstacleData(currentCenter, currentRange, -1, currentGridSize);
+            }
         }
         
         private static Vector3 SnapToGrid(Vector3 pos, float gridSize)
@@ -367,6 +386,12 @@ namespace InstantPipes
             {
                 return createdPipePaths.Count;
             }
+        }
+        
+        // 현재 그리드 설정 정보 반환 (디버깅용)
+        public (Vector3 center, float range, float gridSize) GetCurrentGridSettings()
+        {
+            return (currentCenter, currentRange, currentGridSize);
         }
     }
 
@@ -718,68 +743,173 @@ namespace InstantPipes
                 Vector3 startPos = request.startPoint + request.startNormal.normalized * Height;
                 Vector3 endPos = request.endPoint + request.endNormal.normalized * Height;
                 
-                // X축 최소/최대값 업데이트
-                minX = Mathf.Min(minX, startPos.x, endPos.x);
-                maxX = Mathf.Max(maxX, startPos.x, endPos.x);
+                // 원본 엔드포인트도 포함
+                Vector3[] allPoints = { 
+                    request.startPoint, request.endPoint, startPos, endPos 
+                };
                 
-                // Y축 최소/최대값 업데이트
-                minY = Mathf.Min(minY, startPos.y, endPos.y);
-                maxY = Mathf.Max(maxY, startPos.y, endPos.y);
-                
-                // Z축 최소/최대값 업데이트
-                minZ = Mathf.Min(minZ, startPos.z, endPos.z);
-                maxZ = Mathf.Max(maxZ, startPos.z, endPos.z);
+                foreach (var point in allPoints)
+                {
+                    minX = Mathf.Min(minX, point.x);
+                    maxX = Mathf.Max(maxX, point.x);
+                    minY = Mathf.Min(minY, point.y);
+                    maxY = Mathf.Max(maxY, point.y);
+                    minZ = Mathf.Min(minZ, point.z);
+                    maxZ = Mathf.Max(maxZ, point.z);
+                }
             }
             
-            // 여유 공간 추가 (제한된 패딩)
-            float basePadding = GridSize * 3;
-            float maxPadding = 50f; // 최대 패딩 제한
-            float padding = Mathf.Min(basePadding, maxPadding);
+            // 실제 환경 크기 계산
+            Vector3 environmentSize = new Vector3(maxX - minX, maxY - minY, maxZ - minZ);
+            float maxEnvironmentDimension = Mathf.Max(environmentSize.x, environmentSize.y, environmentSize.z);
             
-            // 범위가 너무 작은 경우 최소 크기 보장
-            float minRange = GridSize * 10;
-            
-            minX -= padding;
-            maxX += padding;
-            minY -= padding;
-            maxY += padding;
-            minZ -= padding;
-            maxZ += padding + 10f; // Z축 최대값에 +10 추가
-            
-            // 최소 범위 보장
-            if (maxX - minX < minRange)
+            // 최대 파이프 반지름 계산
+            float maxPipeRadius = 0f;
+            foreach (var request in allPathRequests)
             {
-                float center = (minX + maxX) * 0.5f;
-                minX = center - minRange * 0.5f;
-                maxX = center + minRange * 0.5f;
+                maxPipeRadius = Mathf.Max(maxPipeRadius, request.pipeRadius);
             }
             
-            if (maxY - minY < minRange)
-            {
-                float center = (minY + maxY) * 0.5f;
-                minY = center - minRange * 0.5f;
-                maxY = center + minRange * 0.5f;
-            }
+            // 환경 크기에 따른 적응적 패딩 계산
+            float adaptivePadding = CalculateAdaptivePadding(environmentSize, maxPipeRadius, maxEnvironmentDimension);
             
-            if (maxZ - minZ < minRange)
-            {
-                float center = (minZ + maxZ) * 0.5f;
-                minZ = center - minRange * 0.5f;
-                maxZ = center + minRange * 0.5f;
-            }
+            // 각 축별 개별 패딩 적용 (비대칭 환경 대응)
+            float paddingX = Mathf.Max(adaptivePadding, environmentSize.x * 0.2f + maxPipeRadius * 3f);
+            float paddingY = Mathf.Max(adaptivePadding, environmentSize.y * 0.15f + Height * 2f); // Y축은 Height 고려
+            float paddingZ = Mathf.Max(adaptivePadding, environmentSize.z * 0.2f + maxPipeRadius * 3f);
+            
+            // 최종 그리드 범위 계산
+            minX -= paddingX;
+            maxX += paddingX;
+            minY -= paddingY;
+            maxY += paddingY + Height; // Y축 상단에 추가 여백
+            minZ -= paddingZ;
+            maxZ += paddingZ;
+            
+            // 최소 범위 보장 (너무 작은 환경 방지)
+            float minRangePerAxis = GridSize * 10f;
+            
+            EnsureMinimumRange(ref minX, ref maxX, minRangePerAxis);
+            EnsureMinimumRange(ref minY, ref maxY, minRangePerAxis);
+            EnsureMinimumRange(ref minZ, ref maxZ, minRangePerAxis);
+            
+            // 성능을 고려한 최대 범위 제한
+            float maxAllowedRange = CalculateMaxAllowedRange(maxEnvironmentDimension);
+            LimitMaximumRange(ref minX, ref maxX, maxAllowedRange);
+            LimitMaximumRange(ref minY, ref maxY, maxAllowedRange);
+            LimitMaximumRange(ref minZ, ref maxZ, maxAllowedRange);
             
             gridMinBounds = new Vector3(minX, minY, minZ);
             gridMaxBounds = new Vector3(maxX, maxY, maxZ);
             
-            // 범위 크기 계산 및 로그
-            Vector3 rangeSize = gridMaxBounds - gridMinBounds;
-            int estimatedNodes = Mathf.RoundToInt((rangeSize.x / GridSize) * (rangeSize.y / GridSize) * (rangeSize.z / GridSize));
+            // 최종 그리드 정보 로깅
+            LogGridCalculationResults(environmentSize, maxEnvironmentDimension, maxPipeRadius, adaptivePadding);
+        }
+        
+        // 환경 크기에 따른 적응적 패딩 계산
+        private float CalculateAdaptivePadding(Vector3 environmentSize, float maxPipeRadius, float maxDimension)
+        {
+            // 기본 패딩 (파이프 반지름 기반)
+            float basePadding = maxPipeRadius * 5f;
             
-            // 경고가 필요한 경우에만 로그 출력
+            // 환경 크기 비례 패딩
+            float environmentPadding = 0f;
+            
+            if (maxDimension > 200f)
+            {
+                // 대형 환경: 환경 크기의 15%
+                environmentPadding = maxDimension * 0.15f;
+            }
+            else if (maxDimension > 50f)
+            {
+                // 중형 환경: 환경 크기의 25%
+                environmentPadding = maxDimension * 0.25f;
+            }
+            else
+            {
+                // 소형 환경: 환경 크기의 40%
+                environmentPadding = maxDimension * 0.4f;
+            }
+            
+            // 최종 패딩 (기본 패딩과 환경 패딩 중 큰 값)
+            float finalPadding = Mathf.Max(basePadding, environmentPadding);
+            
+            // 최소 패딩 보장
+            finalPadding = Mathf.Max(finalPadding, GridSize * 5f);
+            
+            // 최대 패딩 제한 (메모리 및 성능 고려)
+            finalPadding = Mathf.Min(finalPadding, 500f);
+            
+            return finalPadding;
+        }
+        
+        // 최소 범위 보장
+        private void EnsureMinimumRange(ref float min, ref float max, float minRange)
+        {
+            if (max - min < minRange)
+            {
+                float center = (min + max) * 0.5f;
+                min = center - minRange * 0.5f;
+                max = center + minRange * 0.5f;
+            }
+        }
+        
+        // 최대 범위 제한
+        private void LimitMaximumRange(ref float min, ref float max, float maxRange)
+        {
+            if (max - min > maxRange)
+            {
+                float center = (min + max) * 0.5f;
+                min = center - maxRange * 0.5f;
+                max = center + maxRange * 0.5f;
+            }
+        }
+        
+        // 성능을 고려한 최대 허용 범위 계산
+        private float CalculateMaxAllowedRange(float maxEnvironmentDimension)
+        {
+            // 환경 크기에 따른 적응적 최대 범위
+            if (maxEnvironmentDimension > 500f)
+            {
+                return 1500f; // 매우 큰 환경
+            }
+            else if (maxEnvironmentDimension > 200f)
+            {
+                return 800f; // 큰 환경
+            }
+            else if (maxEnvironmentDimension > 100f)
+            {
+                return 400f; // 중간 환경
+            }
+            else
+            {
+                return 200f; // 작은 환경
+            }
+        }
+        
+        // 그리드 계산 결과 로깅
+        private void LogGridCalculationResults(Vector3 environmentSize, float maxDimension, float maxPipeRadius, float padding)
+        {
+            Vector3 finalGridSize = gridMaxBounds - gridMinBounds;
+            int estimatedNodes = Mathf.RoundToInt((finalGridSize.x / GridSize) * (finalGridSize.y / GridSize) * (finalGridSize.z / GridSize));
+            
+            Debug.Log($"[자동 그리드] 환경 크기: {environmentSize} (최대: {maxDimension:F1})");
+            Debug.Log($"[자동 그리드] 최대 파이프 반지름: {maxPipeRadius:F1}, 적응적 패딩: {padding:F1}");
+            Debug.Log($"[자동 그리드] 최종 범위: {gridMinBounds} ~ {gridMaxBounds}");
+            Debug.Log($"[자동 그리드] 그리드 크기: {finalGridSize}, 예상 노드: {estimatedNodes:N0}개");
+            
+            // 성능 경고
             if (estimatedNodes > 100000)
             {
-                Debug.LogWarning($"[그리드] 예상 노드 수가 많음: {estimatedNodes:N0}개 - 성능 저하 가능");
-                Debug.LogWarning($"  범위: {gridMinBounds} ~ {gridMaxBounds}");
+                Debug.LogWarning($"[자동 그리드] 예상 노드 수가 많음: {estimatedNodes:N0}개 - 성능 저하 가능성");
+            }
+            else if (estimatedNodes > 50000)
+            {
+                Debug.Log($"[자동 그리드] 중간 크기 그리드: {estimatedNodes:N0}개 노드");
+            }
+            else
+            {
+                Debug.Log($"[자동 그리드] 최적화된 그리드: {estimatedNodes:N0}개 노드");
             }
         }
         
@@ -796,80 +926,43 @@ namespace InstantPipes
             // 그리드 크기 제한 (성능 및 메모리 보호)
             Vector3 gridSize = gridMaxBounds - gridMinBounds;
             
-            // 무한반복 방지를 위한 더 엄격한 제한
-            int maxSafeNodesPerAxis = Mathf.Min(customMaxNodesPerAxis, 30); // 축당 최대 30개로 제한
-            int maxSafeTotalNodes = Mathf.Min(customMaxTotalNodes, 5000); // 총 최대 5000개로 제한
-            
-            Debug.Log($"[그리드] 노드 생성 시작 - 안전 제한: 축당 {maxSafeNodesPerAxis}, 총 {maxSafeTotalNodes}개");
-            
             // 그리드가 너무 클 경우 범위 축소
-            if (gridSize.x / GridSize > maxSafeNodesPerAxis)
+            if (gridSize.x / GridSize > customMaxNodesPerAxis)
             {
                 float center = (gridMinBounds.x + gridMaxBounds.x) * 0.5f;
-                float halfRange = maxSafeNodesPerAxis * GridSize * 0.5f;
+                float halfRange = customMaxNodesPerAxis * GridSize * 0.5f;
                 gridMinBounds.x = center - halfRange;
                 gridMaxBounds.x = center + halfRange;
                 Debug.LogWarning($"[그리드] X축 범위가 너무 커서 축소: {gridMinBounds.x} ~ {gridMaxBounds.x}");
             }
             
-            if (gridSize.y / GridSize > maxSafeNodesPerAxis)
+            if (gridSize.y / GridSize > customMaxNodesPerAxis)
             {
                 float center = (gridMinBounds.y + gridMaxBounds.y) * 0.5f;
-                float halfRange = maxSafeNodesPerAxis * GridSize * 0.5f;
+                float halfRange = customMaxNodesPerAxis * GridSize * 0.5f;
                 gridMinBounds.y = center - halfRange;
                 gridMaxBounds.y = center + halfRange;
                 Debug.LogWarning($"[그리드] Y축 범위가 너무 커서 축소: {gridMinBounds.y} ~ {gridMaxBounds.y}");
             }
             
-            if (gridSize.z / GridSize > maxSafeNodesPerAxis)
+            if (gridSize.z / GridSize > customMaxNodesPerAxis)
             {
                 float center = (gridMinBounds.z + gridMaxBounds.z) * 0.5f;
-                float halfRange = maxSafeNodesPerAxis * GridSize * 0.5f;
+                float halfRange = customMaxNodesPerAxis * GridSize * 0.5f;
                 gridMinBounds.z = center - halfRange;
                 gridMaxBounds.z = center + halfRange;
                 Debug.LogWarning($"[그리드] Z축 범위가 너무 커서 축소: {gridMinBounds.z} ~ {gridMaxBounds.z}");
             }
             
-            // 안전한 그리드 생성 (더 엄격한 제한)
+            // 안전한 그리드 생성
             int nodeCount = 0;
-            int xSteps = 0, ySteps = 0, zSteps = 0;
-            var startTime = System.DateTime.Now;
             
-            for (float x = gridMinBounds.x; x <= gridMaxBounds.x && nodeCount < maxSafeTotalNodes; x += GridSize)
+            for (float x = gridMinBounds.x; x <= gridMaxBounds.x && nodeCount < customMaxTotalNodes; x += GridSize)
             {
-                xSteps++;
-                ySteps = 0;
-                
-                // X축 단계 제한 체크
-                if (xSteps > maxSafeNodesPerAxis)
+                for (float y = gridMinBounds.y; y <= gridMaxBounds.y && nodeCount < customMaxTotalNodes; y += GridSize)
                 {
-                    Debug.LogWarning($"[그리드] X축 단계 제한 도달: {xSteps}");
-                    break;
-                }
-                
-                for (float y = gridMinBounds.y; y <= gridMaxBounds.y && nodeCount < maxSafeTotalNodes; y += GridSize)
-                {
-                    ySteps++;
-                    zSteps = 0;
-                    
-                    // Y축 단계 제한 체크
-                    if (ySteps > maxSafeNodesPerAxis)
+                    for (float z = gridMinBounds.z; z <= gridMaxBounds.z && nodeCount < customMaxTotalNodes; z += GridSize)
                     {
-                        Debug.LogWarning($"[그리드] Y축 단계 제한 도달: {ySteps}");
-                        break;
-                    }
-                    
-                    for (float z = gridMinBounds.z; z <= gridMaxBounds.z && nodeCount < maxSafeTotalNodes; z += GridSize)
-                    {
-                        zSteps++;
-                        
-                        // Z축 단계 제한 체크
-                        if (zSteps > maxSafeNodesPerAxis)
-                        {
-                            Debug.LogWarning($"[그리드] Z축 단계 제한 도달: {zSteps}");
-                            break;
-                        }
-                        
                         Vector3 pos = SnapToGrid(new Vector3(x, y, z), GridSize);
                         if (!nodes.ContainsKey(pos))
                         {
@@ -877,37 +970,20 @@ namespace InstantPipes
                             nodeCount++;
                         }
                         
-                        // 1000개마다 진행 상황 체크
-                        if (nodeCount % 1000 == 0 && nodeCount > 0)
-                        {
-                            var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
-                            Debug.Log($"[그리드] 노드 생성 진행 중: {nodeCount}/{maxSafeTotalNodes}개, 경과시간: {elapsedTime:F2}초");
-                            
-                            // 노드 생성이 너무 오래 걸리면 중단
-                            if (elapsedTime > 2.0) // 2초 제한
-                            {
-                                Debug.LogError($"[그리드] 노드 생성 타임아웃 - 2초 초과");
-                                break;
-                            }
-                        }
-                        
                         // 안전장치: 너무 많은 노드 생성 방지
-                        if (nodeCount >= maxSafeTotalNodes)
+                        if (nodeCount >= customMaxTotalNodes)
                         {
-                            Debug.LogWarning($"[그리드] 최대 노드 수 도달로 생성 중단: {maxSafeTotalNodes}개");
+                            Debug.LogWarning($"[그리드] 최대 노드 수 도달로 생성 중단: {customMaxTotalNodes}개");
                             break;
                         }
                     }
                 }
             }
             
-            var totalTime = (System.DateTime.Now - startTime).TotalSeconds;
-            Debug.Log($"[그리드] 노드 생성 완료: {nodeCount}개 (시간: {totalTime:F2}초, 범위: {gridMinBounds} ~ {gridMaxBounds})");
-            
-            // 경고가 필요한 경우에만 추가 로그 출력
-            if (nodeCount > 2000)
+            // 경고가 필요한 경우에만 로그 출력
+            if (nodeCount > 50000)
             {
-                Debug.LogWarning($"[그리드] 대용량 노드 생성됨: {nodeCount}개 - 성능에 영향을 줄 수 있음");
+                Debug.LogWarning($"[그리드] 대용량 노드 생성: {nodeCount}개 (범위: {gridMinBounds} ~ {gridMaxBounds})");
             }
         }
         
@@ -997,31 +1073,18 @@ namespace InstantPipes
             var iteration = 0;
             var startTime = System.DateTime.Now;
             
-            // 무한루프 방지를 위한 더 엄격한 설정
-            int maxSafeIterations = Mathf.Min(MaxIterations, customMaxIterations);
-            double maxSafeTimeoutSeconds = Math.Min(customMaxTimeoutSeconds, 5.0); // 최대 5초로 제한
-            
-            Debug.Log($"[DStar] 경로 탐색 시작 - 최대 반복: {maxSafeIterations}, 타임아웃: {maxSafeTimeoutSeconds}초");
-            
-            while (openList.Count > 0 && iteration < maxSafeIterations)
+            while (openList.Count > 0 && iteration < MaxIterations)
             {
-                // 매 10번마다 타임아웃 체크 (더 자주 체크)
-                if (iteration % 10 == 0)
+                // 타임아웃 체크 (100번마다)
+                if (iteration % 100 == 0)
                 {
                     var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
-                    if (elapsedTime > maxSafeTimeoutSeconds)
+                    if (elapsedTime > customMaxTimeoutSeconds)
                     {
-                        Debug.LogError($"[DStar] 타임아웃 발생 ({maxSafeTimeoutSeconds}초) - 반복: {iteration}");
+                        Debug.LogError($"[DStar] 타임아웃 발생 ({customMaxTimeoutSeconds}초) - 반복: {iteration}");
                         LastPathSuccess = false;
                         break;
                     }
-                }
-                
-                // 100번마다 진행 상황 로그
-                if (iteration % 100 == 0 && iteration > 0)
-                {
-                    var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
-                    Debug.Log($"[DStar] 진행 중... 반복: {iteration}/{maxSafeIterations}, 경과시간: {elapsedTime:F2}초, OpenList: {openList.Count}");
                 }
                 
                 var currentKey = openList.Peek();
@@ -1032,19 +1095,10 @@ namespace InstantPipes
                 if ((CompareKey(currentKey, startKey) >= 0) && 
                     (Mathf.Abs(startNode.g - startNode.rhs) < 0.001f))
                 {
-                    Debug.Log($"[DStar] 정상 종료 - 반복: {iteration}, 시간: {(System.DateTime.Now - startTime).TotalSeconds:F2}초");
                     break;
                 }
                 
                 iteration++;
-                
-                // OpenList가 비정상적으로 클 경우 조기 종료
-                if (openList.Count > 10000)
-                {
-                    Debug.LogError($"[DStar] OpenList가 너무 큼 ({openList.Count}) - 조기 종료");
-                    LastPathSuccess = false;
-                    break;
-                }
                 
                 var u = openList.Dequeue();
                 var uPos = u.position;
@@ -1066,9 +1120,9 @@ namespace InstantPipes
             
             var totalTime = (System.DateTime.Now - startTime).TotalSeconds;
             
-            if (iteration >= maxSafeIterations)
+            if (iteration >= MaxIterations)
             {
-                Debug.LogError($"[DStar] 최대 반복 횟수 도달: {maxSafeIterations}, 시간: {totalTime:F2}초");
+                Debug.LogError($"[DStar] 최대 반복 횟수 도달: {MaxIterations}, 시간: {totalTime:F2}초");
                 LastPathSuccess = false;
             }
             else if (openList.Count == 0)
@@ -1081,44 +1135,22 @@ namespace InstantPipes
         {
             List<Vector3> path = new();
             Vector3 current = start;
-            
-            // 무한루프 방지를 위한 더 엄격한 설정
-            int maxPathSteps = Mathf.Min(10000, customMaxTotalNodes / 10); // 더 작은 값 사용
+            int maxPathSteps = 10000;
             int steps = 0;
             var startTime = System.DateTime.Now;
-            double maxTimeoutSeconds = 3.0; // 3초로 제한
-            
-            HashSet<Vector3> visitedNodes = new(); // 중복 방문 방지
-            
-            Debug.Log($"[GetPath] 경로 구성 시작 - 최대 단계: {maxPathSteps}, 타임아웃: {maxTimeoutSeconds}초");
             
             while (!AreEqual(current, goal) && steps < maxPathSteps)
             {
-                // 매 100번마다 타임아웃 체크
-                if (steps % 100 == 0)
-                {
-                    var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
-                    if (elapsedTime > maxTimeoutSeconds)
-                    {
-                        Debug.LogError($"[GetPath] 타임아웃 발생 ({maxTimeoutSeconds}초) - 단계: {steps}");
-                        return null;
-                    }
-                }
-                
-                // 1000번마다 진행 상황 로그
+                // 타임아웃 체크 (1000번마다)
                 if (steps % 1000 == 0 && steps > 0)
                 {
                     var elapsedTime = (System.DateTime.Now - startTime).TotalSeconds;
-                    Debug.Log($"[GetPath] 진행 중... 단계: {steps}/{maxPathSteps}, 경과시간: {elapsedTime:F2}초");
+                    if (elapsedTime > 10)
+                    {
+                        Debug.LogError($"[GetPath] 타임아웃 발생 (10초) - 단계: {steps}");
+                        return null;
+                    }
                 }
-                
-                // 중복 방문 체크 (무한루프 방지)
-                if (visitedNodes.Contains(current))
-                {
-                    Debug.LogError($"[GetPath] 중복 방문 감지 - 무한루프 방지를 위해 종료: {current}");
-                    return null;
-                }
-                visitedNodes.Add(current);
                 
                 float min = Mathf.Infinity;
                 Vector3 next = current;
@@ -1138,20 +1170,12 @@ namespace InstantPipes
 
                 if (!foundValidNeighbor || min == Mathf.Infinity || AreEqual(next, current))
                 {
-                    Debug.LogWarning($"[GetPath] 유효한 다음 노드를 찾지 못함 - 단계: {steps}");
                     return null; // No path
                 }
 
                 current = next;
                 path.Add(current);
                 steps++;
-                
-                // 방문한 노드가 너무 많아지면 메모리 보호
-                if (visitedNodes.Count > 5000)
-                {
-                    Debug.LogError($"[GetPath] 방문 노드 수가 너무 많음 ({visitedNodes.Count}) - 조기 종료");
-                    return null;
-                }
             }
             
             var totalTime = (System.DateTime.Now - startTime).TotalSeconds;
@@ -1161,8 +1185,7 @@ namespace InstantPipes
                 Debug.LogError($"[GetPath] 최대 단계 수 도달: {maxPathSteps}, 시간: {totalTime:F2}초");
                 return null;
             }
-            
-            Debug.Log($"[GetPath] 경로 구성 완료 - 단계: {steps}, 시간: {totalTime:F2}초, 포인트: {path.Count}개");
+
             return path;
         }
 

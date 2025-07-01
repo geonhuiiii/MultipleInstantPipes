@@ -51,8 +51,11 @@ namespace InstantPipes
         {
             if (pipeGenerator == null) return;
             
-            // 파이프 정보 업데이트 로그
-            Debug.Log("경로 시각화 정보 업데이트 중...");
+            // MultiPathCreator를 통해 시각화 정보 가져오기
+            if (pipeGenerator.MultiPathCreator != null)
+            {
+                Debug.Log("경로 시각화 정보 업데이트 중...");
+            }
         }
         
         
