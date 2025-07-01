@@ -485,7 +485,12 @@ namespace InstantPipes
 
         private float Heuristic(Vector3 a, Vector3 b)
         {
-            return Mathf.Abs(a.x - b.x) + Mathf.Abs(a.y - b.y) + Mathf.Abs(a.z - b.z);
+            // 맨해튼 거리와 유클리드 거리의 조합 사용
+            float manhattan = Mathf.Abs(a.x - b.x) + Mathf.Abs(a.y - b.y) + Mathf.Abs(a.z - b.z);
+            float euclidean = Vector3.Distance(a, b);
+            
+            // 맨해튼 거리를 기본으로 하되, 유클리드 거리로 보정
+            return manhattan * 0.8f + euclidean * 0.2f;
         }
 
         private float Cost(Vector3 a, Vector3 b)
@@ -497,7 +502,20 @@ namespace InstantPipes
 
                 return NearObstaclesPriority;
             }
-            return 1;
+            
+            // 기본 이동 비용
+            float baseCost = Vector3.Distance(a, b);
+            
+            // 방향 변화에 대한 패널티 (직선 경로 선호)
+            Vector3 direction = (b - a).normalized;
+            
+            // 수직/수평 이동을 선호하도록 약간의 보너스
+            if (Mathf.Abs(direction.x) > 0.9f || Mathf.Abs(direction.y) > 0.9f || Mathf.Abs(direction.z) > 0.9f)
+            {
+                baseCost *= 0.95f; // 5% 보너스
+            }
+            
+            return baseCost;
         }
 
         private List<Vector3> GetNeighbors(Vector3 pos)
@@ -755,48 +773,116 @@ namespace InstantPipes
         {
             List<Vector3> path = new();
             Vector3 current = start;
-            int maxPathLength = nodes.Count; // 최대 경로 길이 제한
+            int maxPathLength = nodes.Count * 2; // 최대 경로 길이를 더 여유롭게 설정
             int pathLength = 0;
+            Vector3 lastPosition = Vector3.zero;
+            int stuckCount = 0; // 같은 위치에 머무는 횟수
+            const int maxStuckCount = 3; // 같은 위치에 최대 머무를 수 있는 횟수
             
             Debug.Log($"[경로 탐색] 시작: {start} → 목표: {goal}");
             
             while (!AreEqual(current, goal) && pathLength < maxPathLength)
             {
-                float min = Mathf.Infinity;
+                float bestScore = Mathf.Infinity;
                 Vector3 next = current;
                 bool foundBetterPath = false;
                 
                 foreach (var s in GetNeighbors(current))
                 {
-                    float cost = Cost(current, s) + GetNode(s).g;
+                    float gCost = GetNode(s).g;
+                    float moveCost = Cost(current, s);
+                    float totalCost = moveCost + gCost;
                     
-                    if (cost < min && cost < Mathf.Infinity)
+                    // 휴리스틱을 추가하여 목표 방향 선호
+                    float heuristicToGoal = Heuristic(s, goal);
+                    float combinedScore = totalCost + heuristicToGoal * 0.1f; // 약간의 휴리스틱 가중치
+                    
+                    if (combinedScore < bestScore && totalCost < Mathf.Infinity)
                     {
-                        min = cost;
+                        bestScore = combinedScore;
                         next = s;
                         foundBetterPath = true;
                     }
                 }
 
-                // 더 나은 경로가 없거나 제자리에 머물러 있는 경우
-                if (!foundBetterPath || AreEqual(next, current))
+                // 더 나은 경로가 없는 경우
+                if (!foundBetterPath)
                 {
-                    Debug.LogWarning($"[경로 탐색] 경로를 찾을 수 없음 - 현재: {current}, 최소 비용: {min}");
+                    Debug.LogWarning($"[경로 탐색] 경로를 찾을 수 없음 - 현재: {current}, 최고 점수: {bestScore}");
                     return null;
                 }
                 
-                // 방문한 위치인지 확인 (순환 방지)
-                if (path.Contains(next))
+                // 제자리에 머물러 있는 경우 체크
+                if (AreEqual(next, current))
                 {
-                    Debug.LogWarning($"[경로 탐색] 순환 경로 감지 - {next}를 이미 방문함");
+                    Debug.LogWarning($"[경로 탐색] 제자리 머물기 감지 - 현재: {current}");
                     return null;
                 }
+                
+                // 스마트한 순환 감지: 같은 위치를 연속으로 방문하는 경우만 체크
+                if (AreEqual(next, lastPosition))
+                {
+                    stuckCount++;
+                    if (stuckCount >= maxStuckCount)
+                    {
+                        Debug.LogWarning($"[경로 탐색] 진동/정체 감지 - {next}에서 {stuckCount}회 반복");
+                        
+                        // 진동이 감지되면 다른 경로 시도
+                        Vector3 alternativePath = Vector3.zero;
+                        float alternativeBestScore = Mathf.Infinity;
+                        bool foundAlternative = false;
+                        
+                        foreach (var s in GetNeighbors(current))
+                        {
+                            // 최근에 방문한 위치가 아닌 다른 경로 찾기
+                            if (!AreEqual(s, next) && !AreEqual(s, lastPosition))
+                            {
+                                float gCost = GetNode(s).g;
+                                float moveCost = Cost(current, s);
+                                float totalCost = moveCost + gCost;
+                                float heuristicToGoal = Heuristic(s, goal);
+                                float combinedScore = totalCost + heuristicToGoal * 0.1f;
+                                
+                                if (combinedScore < alternativeBestScore && totalCost < Mathf.Infinity)
+                                {
+                                    alternativeBestScore = combinedScore;
+                                    alternativePath = s;
+                                    foundAlternative = true;
+                                }
+                            }
+                        }
+                        
+                        if (foundAlternative)
+                        {
+                            Debug.Log($"[경로 탐색] 대안 경로 발견: {alternativePath}, 점수: {alternativeBestScore}");
+                            next = alternativePath;
+                            bestScore = alternativeBestScore;
+                            stuckCount = 0; // 리셋
+                        }
+                        else
+                        {
+                            Debug.LogWarning("[경로 탐색] 대안 경로 없음 - 탐색 실패");
+                            return null;
+                        }
+                    }
+                }
+                else
+                {
+                    stuckCount = 0; // 다른 위치로 이동하면 리셋
+                }
 
+                lastPosition = current;
                 current = next;
                 path.Add(current);
                 pathLength++;
                 
-                Debug.Log($"[경로 탐색] 단계 {pathLength}: {current}, 비용: {min}");
+                Debug.Log($"[경로 탐색] 단계 {pathLength}: {current}, 점수: {bestScore:F2}, 목표거리: {Vector3.Distance(current, goal):F2}");
+                
+                // 너무 긴 경로는 중간에 체크
+                if (pathLength > 0 && pathLength % 50 == 0)
+                {
+                    Debug.Log($"[경로 탐색] 진행 상황: {pathLength}단계, 목표까지 거리: {Vector3.Distance(current, goal):F2}");
+                }
             }
             
             // 목표에 도달했는지 확인
@@ -808,6 +894,13 @@ namespace InstantPipes
             else if (pathLength >= maxPathLength)
             {
                 Debug.LogWarning($"[경로 탐색] 최대 경로 길이 초과: {maxPathLength}");
+                
+                // 부분 경로라도 목표에 가까우면 반환
+                if (Vector3.Distance(current, goal) < GridSize * 2)
+                {
+                    Debug.Log("[경로 탐색] 목표에 가까운 부분 경로 반환");
+                    return path;
+                }
                 return null;
             }
             
