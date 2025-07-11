@@ -1161,7 +1161,7 @@ namespace InstantPipes
             // 파이프 생성 실행 (메인 스레드에서만 가능)
             bool success = false;
             int newPipesCount = 0;
-            List<float> Chaoses = new List<float> { 10f};
+            List<float> Chaoses = new List<float> { 0f};
             List<int> miters = new List<int> { 1};
             int randTimeOriginal = 0;
             var pipeConfigsOriginal = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();

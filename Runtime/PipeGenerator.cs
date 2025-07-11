@@ -11,6 +11,7 @@ namespace InstantPipes
     [RequireComponent(typeof(MeshRenderer))]
     public class PipeGenerator : MonoBehaviour
     {
+        VECTOR3[] _obstacles = new VECTOR3[0];
         public int miter;
         public float Radius = 1;
         public int EdgeCount = 10;
@@ -50,7 +51,7 @@ namespace InstantPipes
         private Mesh _mesh;
 
         public List<Pipe> Pipes = new List<Pipe>();
-        public PathCreatorDstar MultiPathCreator = new PathCreatorDstar();
+        public PathCreatorDLL MultiPathCreator = new PathCreatorDLL();
         private float _maxDistanceBetweenPoints;
         public float MaxCurvature => _maxDistanceBetweenPoints / 2;
 
@@ -424,7 +425,9 @@ namespace InstantPipes
                 // 다중 경로 생성을 위한 설정 리스트 생성
                 bool succ = false;
                 var paths = new List<List<Vector3>>();
+                MultiPathCreator.Obstacles = _obstacles;
                 var path = MultiPathCreator.Create(startPoint, startNormal, endPoint, endNormal, pipeRadius);
+                _obstacles = MultiPathCreator.Obstacles;
                 paths.Add(path);
                 if (path.Count > 0)
                 {
@@ -721,6 +724,25 @@ namespace InstantPipes
         
         public float AddMultiplePipes(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
         {
+            float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue;
+            float maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
+            foreach (var config in pipeConfigs)
+            {
+                var points = new[] { config.startPoint, config.endPoint };
+                foreach (var p in points)
+                {
+                    if (p.x < minX) minX = p.x;
+                    if (p.y < minY) minY = p.y;
+                    if (p.z < minZ) minZ = p.z;
+                    if (p.x > maxX) maxX = p.x;
+                    if (p.y > maxY) maxY = p.y;
+                    if (p.z > maxZ) maxZ = p.z;
+                }
+            }
+            int countX = Mathf.FloorToInt((maxX - minX) / GridSize) + 1;
+            int countY = Mathf.FloorToInt((maxY - minY) / GridSize) + 1;
+            int countZ = Mathf.FloorToInt((maxZ - minZ) / GridSize) + 1;
+            
             float shortestPathValue = 0f;
             // 설정 업데이트
             UpdateMultiPathCreatorSettings();
