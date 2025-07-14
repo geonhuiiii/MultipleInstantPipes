@@ -810,7 +810,7 @@ namespace InstantPipes
             if (evt.type == EventType.Layout) sceneView.Repaint();
         }
 
-        private void CreatePath()
+        private unsafe void CreatePath()
         {
             if (_activeConfig == null || _generator == null || !_activeConfig.HasStartPoint || !_activeConfig.HasEndPoint) return;
 
@@ -1710,7 +1710,7 @@ namespace InstantPipes
         }
 
         // Method to regenerate pipes with new radius
-        private void RegeneratePipesWithNewRadius()
+        private unsafe void RegeneratePipesWithNewRadius()
         {
             if (_generator == null || _activeConfig == null) return;
 

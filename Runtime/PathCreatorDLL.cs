@@ -4,6 +4,7 @@ using UnityEngine;
 using System.Runtime.InteropServices;
 using System;
 using System.Threading.Tasks;
+using System.Diagnostics;
 
 
 namespace InstantPipes
@@ -47,7 +48,12 @@ namespace InstantPipes
     {
 
         [DllImport("astar")] 
-        unsafe private static extern void FindPath(ref VECTOR3* data, ref int pathCount, VECTOR3 start, VECTOR3 end, ref Obstacle* obstacles, float radius, int maxIterations, float gridSize);
+        unsafe private static extern void FindPath(ref VECTOR3* data, ref int pathCount, VECTOR3 start, VECTOR3 end, float radius, int maxIterations, float gridSize);
+        
+        [DllImport("astar")] 
+        unsafe private static extern void Init(ref byte* obstacles, int obstacleCount);
+        [DllImport("astar")] 
+        unsafe private static extern void freeObstacles();
         
         public float Height = 5;
         public float GridRotationY = 0;
@@ -60,10 +66,10 @@ namespace InstantPipes
         public bool hasCollision = false;
 
         public bool LastPathSuccess = true;
-        public VECTOR3[] Obstacles;
         int pathCounts = 0;
         VECTOR3* flatArray = null;
-        Obstacle* obstaclesArray = null;
+        public byte* obstaclesArray = null;
+        public int obstacleCount = 0;
         Vector3[] directions = new Vector3[]
         {
             Vector3.up,
@@ -97,47 +103,19 @@ namespace InstantPipes
             VECTOR3 start = new VECTOR3(pathStart);
             VECTOR3 end = new VECTOR3(pathEnd);
             var pathPoints = new List<Point>();
-            int ObstacleCount = 1;
             VECTOR3* flatArray = stackalloc VECTOR3[countX * countY * countZ];
-            Obstacle* obstaclesArray = stackalloc Obstacle[countX * countY * countZ];
+            Init(ref obstaclesArray, obstacleCount);
 
+            Stopwatch sw = new Stopwatch();
+            sw.Start();
             Task task = Task.Run(() =>
             {
-                FindPath(ref flatArray, ref pathCounts, start, end, ref obstaclesArray, Radius, MaxIterations, gridSize);
-                Debug.Log("Pathfinding task completed");
-            }
-            );
-            while (task.Status == TaskStatus.Running || task.Status == TaskStatus.WaitingToRun  || task.Status == TaskStatus.WaitingForActivation)
-            {
-
-                RaycastHit hit;
-                if (obstaclesArray[ObstacleCount].distance < -1.0f)
-                {
-                    float minDistance = float.MaxValue;
-                    for (int i = 0; i < directions.Length; i++)
-                    {
-                        // Raycast 실행 (원하는 거리만큼)
-                        if (Physics.Raycast(obstaclesArray[ObstacleCount].Position.ToVector3(), directions[i], out hit, Radius*1.5f+gridSize))
-                        {
-                            if (hit.distance < minDistance)
-                                minDistance = hit.distance;
-
-                        }
-                        
-                    }
-                    if (Physics.OverlapSphere(obstaclesArray[ObstacleCount].Position.ToVector3(),0.01f).Length > 0)
-                    {
-                        minDistance = 0;
-                    }
-                    Debug.Log($"Obstacle {ObstacleCount} found at {obstaclesArray[ObstacleCount].Position.ToVector3()} with distance {minDistance}");
-                    obstaclesArray[ObstacleCount].distance = minDistance;
-                    ObstacleCount += 1;
-                }
-                
-            }
+                FindPath(ref flatArray, ref pathCounts, start, end, Radius, MaxIterations, gridSize);
+                UnityEngine.Debug.Log("Pathfinding task completed");
+            });
             task.Wait();
-            Debug.Log(pathCounts + " path points found");
-            Debug.Log(flatArray[0].ToVector3() + " start point");
+            UnityEngine.Debug.Log(pathCounts + " path points found");
+            UnityEngine.Debug.Log(flatArray[0].ToVector3() + " start point");
             for (int i = 0; i < pathCounts; i++)
             {
                 pathPoints.Add(new Point(flatArray[i].ToVector3()));
@@ -167,7 +145,9 @@ namespace InstantPipes
 
             path.Add(pathEnd);
             path.Add(endPoint);
-
+            
+            sw.Stop();
+            UnityEngine.Debug.Log("경로 생성 소요 시간(ms)" + sw.ElapsedMilliseconds);
             return path;
         }
 

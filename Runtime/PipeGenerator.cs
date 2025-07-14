@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using System.Linq;
 using System;
+using System.Diagnostics;
 
 namespace InstantPipes
 {
@@ -9,9 +10,12 @@ namespace InstantPipes
     [RequireComponent(typeof(MeshFilter))]
     [RequireComponent(typeof(MeshCollider))]
     [RequireComponent(typeof(MeshRenderer))]
+
+
     public class PipeGenerator : MonoBehaviour
     {
-        VECTOR3[] _obstacles = new VECTOR3[0];
+        
+        unsafe private byte *Obstacles = null;
         public int miter;
         public float Radius = 1;
         public int EdgeCount = 10;
@@ -130,11 +134,11 @@ namespace InstantPipes
             // Generate meshes for each pipe
             for (int i = 0; i < Pipes.Count; i++)
             {
-                //Debug.Log($"Generating mesh for pipe {i} with {Pipes[i].Points.Count} points");
+                //UnityEngine.Debug.Log($"Generating mesh for pipe {i} with {Pipes[i].Points.Count} points");
                 // Check if pipe has valid points
                 if (Pipes[i].Points == null || Pipes[i].Points.Count < 2)
                 {
-                    //Debug.LogWarning($"Pipe {i} has insufficient points, skipping");
+                    //UnityEngine.Debug.LogWarning($"Pipe {i} has insufficient points, skipping");
                     continue;
                 }
                 
@@ -146,14 +150,14 @@ namespace InstantPipes
                         float.IsInfinity(point.x) || float.IsInfinity(point.y) || float.IsInfinity(point.z))
                     {
                         hasInvalidPoints = true;
-                        //Debug.LogError($"Pipe {i} contains invalid points: {point}");
+                        //UnityEngine.Debug.LogError($"Pipe {i} contains invalid points: {point}");
                         break;
                     }
                 }
                 
                 if (hasInvalidPoints)
                 {
-                    //Debug.LogWarning($"Pipe {i} has invalid points, skipping");
+                    //UnityEngine.Debug.LogWarning($"Pipe {i} has invalid points, skipping");
                     continue;
                 }
                 
@@ -186,20 +190,20 @@ namespace InstantPipes
                             }
                             else
                             {
-                                //Debug.LogWarning($"Pipe {i} generated a mesh with 0 vertices")
+                                //UnityEngine.Debug.LogWarning($"Pipe {i} generated a mesh with 0 vertices")
                             }
                         }
                     }
                     else
                     {
-                        //Debug.LogWarning($"Pipe {i} did not generate any meshes");
+                        //UnityEngine.Debug.LogWarning($"Pipe {i} did not generate any meshes");
                     }
                     
                     _maxDistanceBetweenPoints = Mathf.Max(_maxDistanceBetweenPoints, Pipes[i].GetMaxDistanceBetweenPoints());
                 }
                 catch (System.Exception ex)
                 {
-                    //Debug.LogError($"Error generating mesh for pipe {i}: {ex.Message}\n{ex.StackTrace}");
+                    //UnityEngine.Debug.LogError($"Error generating mesh for pipe {i}: {ex.Message}\n{ex.StackTrace}");
                 }
                 
                 // Restore original radius
@@ -239,29 +243,29 @@ namespace InstantPipes
                     // Check mesh integrity
                     if (_mesh.vertexCount > 0)
                     {
-                        //Debug.Log($"Combined mesh with {_mesh.vertexCount} vertices, {_mesh.triangles.Length/3} triangles");
+                        //UnityEngine.Debug.Log($"Combined mesh with {_mesh.vertexCount} vertices, {_mesh.triangles.Length/3} triangles");
                         
                         // Update the collider
                         _collider.sharedMesh = _mesh;
                     }
                     else
                     {
-                        //Debug.LogError("Combined mesh has 0 vertices!");
+                        //UnityEngine.Debug.LogError("Combined mesh has 0 vertices!");
                     }
                 }
                 catch (System.Exception ex)
                 {
-                    //Debug.LogError($"Error combining meshes: {ex.Message}\n{ex.StackTrace}");
+                    //UnityEngine.Debug.LogError($"Error combining meshes: {ex.Message}\n{ex.StackTrace}");
                 }
             }
             else
             {
-                //Debug.LogWarning("No submeshes to combine!");
+                //UnityEngine.Debug.LogWarning("No submeshes to combine!");
                 _mesh.Clear();
             }
             
             // Update renderer materials
-            //Debug.Log($"Setting {allMaterials.Count} materials");
+            //UnityEngine.Debug.Log($"Setting {allMaterials.Count} materials");
             _renderer.sharedMaterials = allMaterials.ToArray();
         }
 
@@ -334,7 +338,7 @@ namespace InstantPipes
             return pipeMaterial;
         }
 
-        public bool AddPipe(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius = -1, Material material = null)
+        unsafe public bool AddPipe(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius = -1, Material material = null, byte* _obstacles = null, int obstacleCount = 0)
         {
             // 설정 업데이트
             UpdateMultiPathCreatorSettings();
@@ -350,7 +354,7 @@ namespace InstantPipes
                 }
                 PipeRadiuses[newPipeIndex] = radius;
                 
-                //Debug.Log($"Setting pipe radius: {radius} for pipe index: {newPipeIndex}");
+                //UnityEngine.Debug.Log($"Setting pipe radius: {radius} for pipe index: {newPipeIndex}");
             }
             
             // 임시 충돌체 생성
@@ -425,9 +429,10 @@ namespace InstantPipes
                 // 다중 경로 생성을 위한 설정 리스트 생성
                 bool succ = false;
                 var paths = new List<List<Vector3>>();
-                MultiPathCreator.Obstacles = _obstacles;
+                MultiPathCreator.obstaclesArray = _obstacles;
+                MultiPathCreator.obstacleCount = obstacleCount;
                 var path = MultiPathCreator.Create(startPoint, startNormal, endPoint, endNormal, pipeRadius);
-                _obstacles = MultiPathCreator.Obstacles;
+                //_obstacles = MultiPathCreator.Obstacles;
                 paths.Add(path);
                 if (path.Count > 0)
                 {
@@ -437,12 +442,12 @@ namespace InstantPipes
                     // 메시 업데이트
                     UpdateMesh();
                     
-                    //Debug.Log($"파이프 #{newPipeIndex} 생성 성공: {path.Count} 포인트");
+                    //UnityEngine.Debug.Log($"파이프 #{newPipeIndex} 생성 성공: {path.Count} 포인트");
                     succ = true;
                 }
                 else
                 {
-                    //Debug.LogWarning("MultiPathCreator에서 경로를 생성하지 못했습니다");
+                    //UnityEngine.Debug.LogWarning("MultiPathCreator에서 경로를 생성하지 못했습니다");
                     succ = false;
                 }
                 
@@ -474,12 +479,12 @@ namespace InstantPipes
         {
             if (pipeIndex < 0 || pipeIndex >= Pipes.Count)
             {
-                //Debug.LogWarning($"Attempted to remove pipe at invalid index: {pipeIndex}, Pipes count: {Pipes.Count}");
+                //UnityEngine.Debug.LogWarning($"Attempted to remove pipe at invalid index: {pipeIndex}, Pipes count: {Pipes.Count}");
                 return;
             }
             
             // Log before removing
-            //Debug.Log($"Removing pipe at index {pipeIndex}, Pipes count before: {Pipes.Count}");
+            //UnityEngine.Debug.Log($"Removing pipe at index {pipeIndex}, Pipes count before: {Pipes.Count}");
             
             Pipes.RemoveAt(pipeIndex);
             
@@ -501,7 +506,7 @@ namespace InstantPipes
                 }
             }
             
-            //Debug.Log($"Pipe removed, Pipes count after: {Pipes.Count}");
+            //UnityEngine.Debug.Log($"Pipe removed, Pipes count after: {Pipes.Count}");
             UpdateMesh();
         }
 
@@ -565,7 +570,7 @@ namespace InstantPipes
                     }
                     else
                     {
-                        //Debug.LogWarning("MultiPathCreator에서 경로를 생성하지 못했습니다");
+                        //UnityEngine.Debug.LogWarning("MultiPathCreator에서 경로를 생성하지 못했습니다");
                         succ = false;
                     }
                 }
@@ -610,7 +615,7 @@ namespace InstantPipes
             tempCollider.transform.localScale = new Vector3(obstacleRadius, obstacleRadius, obstacleRadius);
             
             // 디버그용 로깅
-            //Debug.Log($"Creating obstacle collider at {position}, radius: {Radius}, collider size: {obstacleRadius}");
+            //UnityEngine.Debug.Log($"Creating obstacle collider at {position}, radius: {Radius}, collider size: {obstacleRadius}");
             
             tempCollider.AddComponent<SphereCollider>();
             
@@ -623,7 +628,7 @@ namespace InstantPipes
             if (pipeIndex < 0 || pipeIndex >= Pipes.Count)
                 return;
             
-            //Debug.Log($"Setting properties for pipe {pipeIndex}, radius: {radius}, material: {(material != null ? material.name : "null")}");
+            //UnityEngine.Debug.Log($"Setting properties for pipe {pipeIndex}, radius: {radius}, material: {(material != null ? material.name : "null")}");
             
             while (PipeRadiuses.Count <= pipeIndex)
             {
@@ -683,31 +688,31 @@ namespace InstantPipes
                 
                 PipeMaterials[pipeIndex] = newMaterial;
                 
-                //Debug.Log($"Set material for pipe {pipeIndex}: {newMaterial.name}, Shader: {newMaterial.shader.name}");
+                //UnityEngine.Debug.Log($"Set material for pipe {pipeIndex}: {newMaterial.name}, Shader: {newMaterial.shader.name}");
             }
             
             UpdateMesh();
         }
 
-        // //Debugging helper to log pipe information
+        // //UnityEngine.Debugging helper to log pipe information
         public void LogPipeInfo()
         {
-            Debug.Log($"=== PIPE GENERATOR INFO ===");
-            Debug.Log($"Total Pipes: {Pipes.Count}");
-            Debug.Log($"PipeMaterials: {PipeMaterials.Count}");
-            Debug.Log($"PipeRadiuses: {PipeRadiuses.Count}");
+            UnityEngine.Debug.Log($"=== PIPE GENERATOR INFO ===");
+            UnityEngine.Debug.Log($"Total Pipes: {Pipes.Count}");
+            UnityEngine.Debug.Log($"PipeMaterials: {PipeMaterials.Count}");
+            UnityEngine.Debug.Log($"PipeRadiuses: {PipeRadiuses.Count}");
             
             for (int i = 0; i < Pipes.Count; i++)
             {
-                Debug.Log($"Pipe {i}: Points: {Pipes[i].Points.Count}");
+                UnityEngine.Debug.Log($"Pipe {i}: Points: {Pipes[i].Points.Count}");
             }
-            Debug.Log($"==========================");
+            UnityEngine.Debug.Log($"==========================");
         }
 
         // Method to clear all pipes
         public void ClearAllPipes()
         {
-            //Debug.Log($"Clearing all pipes. Current count: {Pipes.Count}");
+            //UnityEngine.Debug.Log($"Clearing all pipes. Current count: {Pipes.Count}");
             
             // Clear all pipes and associated data
             Pipes.Clear();
@@ -717,12 +722,12 @@ namespace InstantPipes
             // Update the mesh
             UpdateMesh();
             
-            //Debug.Log("All pipes cleared");
+            //UnityEngine.Debug.Log("All pipes cleared");
         }
 
         // 다중 파이프 생성 메서드
         
-        public float AddMultiplePipes(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
+        unsafe public float AddMultiplePipes(List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)> pipeConfigs)
         {
             float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue;
             float maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
@@ -731,18 +736,35 @@ namespace InstantPipes
                 var points = new[] { config.startPoint, config.endPoint };
                 foreach (var p in points)
                 {
-                    if (p.x < minX) minX = p.x;
+                    if (p.x < minX) minX = p.x-GridSize*2.0f;
                     if (p.y < minY) minY = p.y;
-                    if (p.z < minZ) minZ = p.z;
-                    if (p.x > maxX) maxX = p.x;
-                    if (p.y > maxY) maxY = p.y;
-                    if (p.z > maxZ) maxZ = p.z;
+                    if (p.z < minZ) minZ = p.z-GridSize*2.0f;
+                    if (p.x > maxX) maxX = p.x+GridSize*2.0f;
+                    if (p.y > maxY) maxY = p.y+GridSize*2.0f;
+                    if (p.z > maxZ) maxZ = p.z+GridSize*2.0f;
                 }
             }
-            int countX = Mathf.FloorToInt((maxX - minX) / GridSize) + 1;
-            int countY = Mathf.FloorToInt((maxY - minY) / GridSize) + 1;
-            int countZ = Mathf.FloorToInt((maxZ - minZ) / GridSize) + 1;
-            
+            int countX = Mathf.FloorToInt((maxX - minX) / GridSize) + 10;
+            int countY = Mathf.FloorToInt((maxY - minY) / GridSize) + 10;
+            int countZ = Mathf.FloorToInt((maxZ - minZ) / GridSize) + 10;
+            byte* Obstacles = stackalloc byte[countX * countY * countZ * 2];
+            Stopwatch sw = new Stopwatch();
+            sw.Start();
+            for (int x = 0; x < countX; x++)
+            {
+                for (int y = 0; y < countY; y++)
+                {
+                    for (int z = 0; z < countZ; z++)
+                    {
+                        int index = x + y * countX + z * countX * countY;
+                        Obstacles[index] = Physics.OverlapSphere(new Vector3(minX + x * GridSize, minY + y * GridSize, minZ + z * GridSize), 0.01f).Length > 0 ? (byte)1 : (byte)0;
+                        
+                    }
+                }
+            }   
+            sw.Stop();
+            UnityEngine.Debug.Log("장애물 메모리 할당 소요 시간(ms)" + sw.ElapsedMilliseconds);
+            int obstacleCount = countX * countY * countZ * 2;
             float shortestPathValue = 0f;
             // 설정 업데이트
             UpdateMultiPathCreatorSettings();
@@ -767,7 +789,7 @@ namespace InstantPipes
             var aaaa = 0;
             foreach (var config in configs)
             {
-                AddPipe(config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius, config.material);
+                AddPipe(config.startPoint, config.startNormal, config.endPoint, config.endNormal, config.radius, config.material, Obstacles, obstacleCount);
             }
             bool isCollided = MultiPathCreator.hasCollision;
 
@@ -780,7 +802,7 @@ namespace InstantPipes
             
             Pipes.Clear();
             if (isCollided)
-                Debug.Log($"총 경로 중 충돌발생!.");
+                UnityEngine.Debug.Log($"총 경로 중 충돌발생!.");
 
             foreach (var collider in temporaryColliders)
             {
