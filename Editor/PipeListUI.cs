@@ -921,44 +921,37 @@ namespace InstantPipes
         }
         private async Task GenerateAllPathsAsync(CancellationToken cancellationToken)
         {
-            // --------------------------------------------------------------------------------
-            // 단계 1: 데이터 수집 (메인 스레드에서 안전하게)
-            // --------------------------------------------------------------------------------
-            List<PipeInfo> pipesToCreate = new List<PipeInfo>();
+            var pipesToCreate = new List<PipeInfo>();
             await SwitchToMainThread(() =>
             {
+                // [수정] 람다 외부의 리스트에 직접 데이터를 추가하여 반환값이 없도록 수정
                 foreach (var config in _pipeConfigs)
                 {
                     if (config.HasStartPoint && config.HasEndPoint)
                     {
                         pipesToCreate.Add(new PipeInfo
                         {
-                            StartPoint = config.StartPoint,
-                            StartNormal = config.StartNormal,
-                            EndPoint = config.EndPoint,
-                            EndNormal = config.EndNormal,
-                            Color = config.Color,
-                            Radius = config.Radius,
-                            Config = config
+                            StartPoint = config.StartPoint, StartNormal = config.StartNormal,
+                            EndPoint = config.EndPoint, EndNormal = config.EndNormal,
+                            Color = config.Color, Radius = config.Radius, Config = config
                         });
                     }
                 }
-
-                if (pipesToCreate.Count == 0)
-                {
-                    EditorUtility.DisplayDialog("Generate All Paths", "No valid pipe configurations found.", "OK");
-                    return;
-                }
-                ClearAllPipes();
-                UpdateProgress(0.1f, "파이프 생성 준비 완료...");
             });
 
             if (pipesToCreate.Count == 0 || cancellationToken.IsCancellationRequested)
             {
-                _isGeneratingPaths = false;
                 EditorUtility.ClearProgressBar();
+                _isGeneratingPaths = false;
+                if (pipesToCreate.Count == 0) EditorUtility.DisplayDialog("Generate All Paths", "No valid pipe configurations found.", "OK");
                 return;
             }
+
+            await SwitchToMainThread(() =>
+            {
+                ClearAllPipes();
+                UpdateProgress(0.1f, "파이프 생성 준비 완료...");
+            });
 
             // --------------------------------------------------------------------------------
             // 단계 2: 재질 생성 (메인 스레드에서 안전하게)
@@ -966,116 +959,147 @@ namespace InstantPipes
             var pipeConfigsForGeneration = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();
             await SwitchToMainThread(() =>
             {
+                // [수정] 람다 외부의 리스트에 직접 데이터를 추가하여 반환값이 없도록 수정
                 foreach (var pipeInfo in pipesToCreate)
                 {
                     Material pipeMaterial = new Material(Shader.Find("Universal Render Pipeline/Simple Lit"));
                     pipeMaterial.name = $"Pipe_Material_{pipeInfo.Config.Name}";
-                    // 색상 정보를 올바르게 적용합니다.
-                    if (pipeMaterial.HasProperty("_BaseColor"))
-                        pipeMaterial.SetColor("_BaseColor", pipeInfo.Color);
-                    else if (pipeMaterial.HasProperty("_Color"))
-                        pipeMaterial.SetColor("_Color", pipeInfo.Color);
-
-                    pipeConfigsForGeneration.Add((
-                        pipeInfo.StartPoint, pipeInfo.StartNormal,
-                        pipeInfo.EndPoint, pipeInfo.EndNormal,
-                        pipeInfo.Radius, pipeMaterial
-                    ));
+                    if (pipeMaterial.HasProperty("_BaseColor")) pipeMaterial.SetColor("_BaseColor", pipeInfo.Color);
+                    else if (pipeMaterial.HasProperty("_Color")) pipeMaterial.SetColor("_Color", pipeInfo.Color);
+                    pipeConfigsForGeneration.Add((pipeInfo.StartPoint, pipeInfo.StartNormal, pipeInfo.EndPoint, pipeInfo.EndNormal, pipeInfo.Radius, pipeMaterial));
                 }
             });
 
             // --------------------------------------------------------------------------------
-            // 단계 3: 최적 경로 탐색 (모든 Unity API 호출을 메인 스레드에서 실행)
+            // 단계 3 & 4: 최적 경로 탐색 및 최종 생성 (하나의 연속된 메인 스레드 작업으로 통합)
             // --------------------------------------------------------------------------------
             float shortestPathValue = float.MaxValue;
             var bestPipeConfigOrder = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();
 
             List<float> Chaoses = new List<float> { 3f };
             List<int> miters = new List<int> { 5 };
-            int totalIterations = miters.Sum(m => m) * Chaoses.Count;
+            int totalIterations = _generator.miter;//miters.Sum(m => m) * Chaoses.Count;
             int currentIteration = 0;
 
-            // Task.Run을 사용하되, 모든 핵심 로직을 메인 스레드로 보내 실행하여 스레드 오류를 원천 차단합니다.
-            await Task.Run(async () =>
+            Stopwatch sw = new Stopwatch();
+            /*
+            foreach (var miter in miters)
             {
-                await SwitchToMainThread(async () =>
+                if (cancellationToken.IsCancellationRequested) break;
+                foreach (var chaos in Chaoses)
                 {
-                    Stopwatch sw = new Stopwatch();
-                    foreach (var miter in miters)
+                    if (cancellationToken.IsCancellationRequested) break;
+                    for (int i = 0; i < miter; i++)
                     {
-                        foreach (var chaos in Chaoses)
+                        if (cancellationToken.IsCancellationRequested) break;
+
+                        // 메인 스레드에서 모든 작업을 순차적으로 실행합니다.
+                        await SwitchToMainThread(() =>
                         {
-                            for (int i = 0; i < miter; i++)
+                            currentIteration++;
+                            float progress = 0.1f + (0.8f * (float)currentIteration / totalIterations);
+                            UpdateProgress(progress, $"최적 경로 탐색 중... ({currentIteration}/{totalIterations})");
+
+                            UnityEngine.Random.InitState((int)DateTime.Now.Ticks);
+
+                            var shuffledConfigs = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>(pipeConfigsForGeneration);
+                            ShuffleList(shuffledConfigs);
+
+                            _generator.Chaos = chaos;
+                            _generator.miter = miter;
+
+                            sw.Restart();
+                            float pathValue = _generator.AddMultiplePipes(shuffledConfigs);
+                            sw.Stop();
+                            UnityEngine.Debug.Log($"경로 탐색 소요 시간: {sw.ElapsedMilliseconds}ms, 총 길이: {pathValue}");
+
+                            if (pathValue < shortestPathValue)
                             {
-                                if (cancellationToken.IsCancellationRequested) return;
-
-                                currentIteration++;
-                                float progress = 0.1f + (0.8f * (float)currentIteration / totalIterations);
-                                UpdateProgress(progress, $"최적 경로 탐색 중... ({currentIteration}/{totalIterations})");
-                                
-                                // 이제 이 코드는 100% 메인 스레드에서 실행되므로 안전합니다.
-                                UnityEngine.Random.InitState((int)DateTime.Now.Ticks);
-                                
-                                var shuffledConfigs = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>(pipeConfigsForGeneration);
-                                ShuffleList(shuffledConfigs);
-
-                                _generator.Chaos = chaos;
-                                _generator.miter = miter;
-
-                                sw.Restart();
-                                float pathValue = _generator.AddMultiplePipes(shuffledConfigs);
-                                sw.Stop();
-                                UnityEngine.Debug.Log($"경로 탐색 소요 시간: {sw.ElapsedMilliseconds}ms, 총 길이: {pathValue}");
-
-                                if (pathValue < shortestPathValue)
-                                {
-                                    shortestPathValue = pathValue;
-                                    bestPipeConfigOrder = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>(shuffledConfigs);
-                                }
-                                
-                                // Editor가 멈추지 않도록 잠시 제어권을 넘겨줍니다.
-                                await Task.Delay(1); 
+                                shortestPathValue = pathValue;
+                                bestPipeConfigOrder = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>(shuffledConfigs);
                             }
-                        }
+                        });
+
+                        // Editor가 멈추지 않도록 한 프레임 쉽니다.
+                        await Task.Delay(1);
                     }
-                    
-                    // --------------------------------------------------------------------------------
-                    // 단계 4: 최적 경로로 최종 생성 (메인 스레드)
-                    // --------------------------------------------------------------------------------
-                    if (!cancellationToken.IsCancellationRequested && bestPipeConfigOrder.Count > 0)
+                }
+            }*/
+            for (int i = 0; i < _generator.miter; i++)
+            {
+                if (cancellationToken.IsCancellationRequested) break;
+
+                // 메인 스레드에서 모든 작업을 순차적으로 실행합니다.
+                await SwitchToMainThread(() =>
+                {
+                    currentIteration++;
+                    float progress = 0.1f + (0.8f * (float)currentIteration / totalIterations);
+                    UpdateProgress(progress, $"최적 경로 탐색 중... ({currentIteration}/{totalIterations})");
+
+                    UnityEngine.Random.InitState((int)DateTime.Now.Ticks);
+
+                    var shuffledConfigs = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>(pipeConfigsForGeneration);
+                    ShuffleList(shuffledConfigs);
+
+
+                    sw.Restart();
+                    float pathValue = _generator.AddMultiplePipes(shuffledConfigs);
+                    sw.Stop();
+                    UnityEngine.Debug.Log($"경로 탐색 소요 시간: {sw.ElapsedMilliseconds}ms, 총 길이: {pathValue}");
+
+                    if (pathValue < shortestPathValue)
                     {
-                        UpdateProgress(0.95f, "최적 경로로 최종 생성 중...");
-                        _generator.AddMultiplePipes(bestPipeConfigOrder);
-                        
-                        // 파이프와 설정(Config)을 다시 연결해주는 로직
-                        int pipeIndexCounter = 0;
-                        foreach (var config in _pipeConfigs)
-                        {
-                            config.AssociatedPipeIndices.Clear();
-                        }
-
-                        foreach (var orderedConfigTuple in bestPipeConfigOrder)
-                        {
-                            // 생성된 순서대로 어떤 원본 설정에 속하는지 찾습니다.
-                            var originalPipeInfo = pipesToCreate.Find(p => 
-                                p.Radius == orderedConfigTuple.Item5 && 
-                                p.StartPoint == orderedConfigTuple.Item1
-                            );
-
-                            if(originalPipeInfo != null)
-                            {
-                                originalPipeInfo.Config.AssociatedPipeIndices.Add(pipeIndexCounter++);
-                            }
-                        }
+                        shortestPathValue = pathValue;
+                        bestPipeConfigOrder = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>(shuffledConfigs);
                     }
                 });
-            });
-            
-            // --------------------------------------------------------------------------------
-            // 단계 5: 완료
-            // --------------------------------------------------------------------------------
+
+                // Editor가 멈추지 않도록 한 프레임 쉽니다.
+                await Task.Delay(1);
+            }
+            // 이제 이 부분은 위의 모든 반복문이 '완전히' 끝난 후에만 실행됩니다.
             await SwitchToMainThread(() =>
             {
+                if (!cancellationToken.IsCancellationRequested && bestPipeConfigOrder.Count > 0)
+                {
+                    UpdateProgress(0.95f, "최적 경로로 최종 생성 중...");
+                    _generator.AddMultiplePipes(bestPipeConfigOrder);
+                    
+                    // 파이프와 설정을 다시 연결해주는 로직
+                    int pipeIndexCounter = 0;
+                    var configToPipeCount = new Dictionary<PipeConfig, int>();
+
+                    foreach(var orderedConfigTuple in bestPipeConfigOrder)
+                    {
+                        var originalPipeInfo = pipesToCreate.Find(p => 
+                            p.Radius == orderedConfigTuple.Item5 && 
+                            p.StartPoint == orderedConfigTuple.Item1 &&
+                            p.EndPoint == orderedConfigTuple.Item2
+                        );
+
+                        if(originalPipeInfo != null)
+                        {
+                            if(!configToPipeCount.ContainsKey(originalPipeInfo.Config))
+                            {
+                                configToPipeCount[originalPipeInfo.Config] = 0;
+                            }
+                            configToPipeCount[originalPipeInfo.Config]++;
+                        }
+                    }
+
+                    foreach(var config in _pipeConfigs)
+                    {
+                        config.AssociatedPipeIndices.Clear();
+                        if(configToPipeCount.TryGetValue(config, out int count))
+                        {
+                            for(int i = 0; i < count; i++)
+                            {
+                                config.AssociatedPipeIndices.Add(pipeIndexCounter++);
+                            }
+                        }
+                    }
+                }
+                
                 EditorUtility.ClearProgressBar();
                 _isGeneratingPaths = false;
                 Repaint();
