@@ -919,354 +919,170 @@ namespace InstantPipes
                     // 취소된 경우는 GenerateAllPathsAsync 내부에서 처리
                 });
         }
-
-        // 백그라운드 스레드에서 실행할 비동기 파이프 생성 메서드
         private async Task GenerateAllPathsAsync(CancellationToken cancellationToken)
         {
-            // 모든 파이프 구성 수집 및 전처리 (스레드 안전하게 데이터만 수집)
+            // --------------------------------------------------------------------------------
+            // 단계 1: 데이터 수집 (메인 스레드에서 안전하게)
+            // --------------------------------------------------------------------------------
             List<PipeInfo> pipesToCreate = new List<PipeInfo>();
-            List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Color color, string name)> pipeData =
-                new List<(Vector3, Vector3, Vector3, Vector3, float, Color, string)>();
-
-            // 메인 스레드에서 데이터 수집
-            await Task.Delay(5); // 프레임 넘기기
-            EditorApplication.delayCall += () =>
+            await SwitchToMainThread(() =>
             {
-                try
+                foreach (var config in _pipeConfigs)
                 {
-                    // 모든 파이프 엔드포인트 정보 추출
-                    foreach (var config in _pipeConfigs)
+                    if (config.HasStartPoint && config.HasEndPoint)
                     {
-                        if (config.HasStartPoint && config.HasEndPoint)
+                        pipesToCreate.Add(new PipeInfo
                         {
-                            pipesToCreate.Add(new PipeInfo
-                            {
-                                StartPoint = config.StartPoint,
-                                StartNormal = config.StartNormal,
-                                EndPoint = config.EndPoint,
-                                EndNormal = config.EndNormal,
-                                Color = config.Color,
-                                Radius = config.Radius,
-                                Config = config
-                            });
-                            pipeData.Add((
-                                config.StartPoint,
-                                config.StartNormal,
-                                config.EndPoint,
-                                config.EndNormal,
-                                config.Radius,
-                                config.Color,
-                                config.Name
-                            ));
-
-
-                        }
+                            StartPoint = config.StartPoint,
+                            StartNormal = config.StartNormal,
+                            EndPoint = config.EndPoint,
+                            EndNormal = config.EndNormal,
+                            Color = config.Color,
+                            Radius = config.Radius,
+                            Config = config
+                        });
                     }
-
-                    // 진행 가능한 파이프가 없으면 종료
-                    if (pipesToCreate.Count == 0)
-                    {
-                        _isGeneratingPaths = false;
-                        EditorUtility.DisplayDialog("Generate All Paths",
-                            "No valid pipe configurations found. Please set start and end points for at least one pipe configuration.",
-                            "OK");
-                        return;
-                    }
-
-                    // 기존 파이프 모두 제거
-                    ClearAllPipes();
-
-                    // 준비 단계 완료 진행률 표시
-                    UpdateProgress(0.1f, "파이프 생성 준비 완료");
                 }
-                catch (System.Exception ex)
+
+                if (pipesToCreate.Count == 0)
                 {
-                    _isGeneratingPaths = false;
-                    UnityEngine.Debug.LogError($"데이터 수집 중 오류 발생: {ex.Message}");
-                    EditorUtility.DisplayDialog("오류 발생",
-                        "데이터 수집 중 오류가 발생했습니다.",
-                        "확인");
+                    EditorUtility.DisplayDialog("Generate All Paths", "No valid pipe configurations found.", "OK");
+                    return;
                 }
-            };
+                ClearAllPipes();
+                UpdateProgress(0.1f, "파이프 생성 준비 완료...");
+            });
 
-            // 백그라운드에서 파이프 데이터 처리
-            await Task.Delay(2000); // 메인 스레드 작업 완료 대기
-
-            // 취소 요청 확인
-            if (cancellationToken.IsCancellationRequested)
+            if (pipesToCreate.Count == 0 || cancellationToken.IsCancellationRequested)
             {
-                await SwitchToMainThread(() =>
-                {
-                    _isGeneratingPaths = false;
-                    EditorUtility.DisplayDialog("작업 취소됨", "파이프 생성이 취소되었습니다.", "확인");
-                });
+                _isGeneratingPaths = false;
+                EditorUtility.ClearProgressBar();
                 return;
             }
 
-            // 파이프 생성 정보 처리 (무거운 계산 작업을 백그라운드에서 수행)
-            List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Color color, string name)>
-                processedPipes = new List<(Vector3, Vector3, Vector3, Vector3, float, Color, string)>();
-
-            // 진행 상태 표시 변수
-            int totalPaths = pipeData.Count;
-            int processedPaths = 0;
-            bool isCancelled = false;
-
-            // 각 파이프 데이터 처리 (백그라운드에서 계산량이 많은 작업 처리)
-            for (int i = 0; i < pipeData.Count; i++)
-            {
-                // 취소 요청 확인
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    isCancelled = true;
-                    break;
-                }
-
-                var pipe = pipeData[i];
-                processedPaths++;
-
-
-                // 처리된 파이프 추가
-                processedPipes.Add(pipe);
-
-                // 진행 상태 메인 스레드에 업데이트
-                await SwitchToMainThread(() =>
-                {
-                    float progress = 0.1f + (0.6f * (float)processedPaths / totalPaths); // 10%~70% 범위 내에서 진행
-                    UpdateProgress(progress, $"파이프 처리 중 ({processedPaths}/{totalPaths}): {pipe.name}");
-                });
-            }
-
-            // 취소된 경우 처리
-            if (isCancelled)
-            {
-                await SwitchToMainThread(() =>
-                {
-                    if (processedPipes.Count > 0)
-                    {
-                        UpdateProgress(0.75f, "취소됨. 기존 처리된 파이프에 대해 경로를 생성하시겠습니까?");
-
-                        if (!EditorUtility.DisplayDialog("작업 취소됨",
-                            $"경로 생성이 취소되었습니다. 이미 처리된 {processedPipes.Count}개의 구성에 대해 경로를 생성하시겠습니까?",
-                            "처리된 항목 생성", "모두 취소"))
-                        {
-                            // 모든 작업 취소
-                            _isGeneratingPaths = false;
-                            return;
-                        }
-                        // 계속 진행 - 이미 처리된 파이프만 생성
-                    }
-                    else
-                    {
-                        // 처리된 파이프가 없으면 종료
-                        _isGeneratingPaths = false;
-                        EditorUtility.DisplayDialog("작업 취소됨",
-                            "경로 생성이 취소되었습니다. 생성된 경로가 없습니다.",
-                            "확인");
-                        return;
-                    }
-                });
-
-                if (processedPipes.Count == 0)
-                    return;
-            }
-
-            // 파이프 생성 전 최종 준비 (메인 스레드에서 수행)
-            List<(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float radius, Material material)>
-                pipeConfigs = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();
-            int pipesBefore = 0;
-
+            // --------------------------------------------------------------------------------
+            // 단계 2: 재질 생성 (메인 스레드에서 안전하게)
+            // --------------------------------------------------------------------------------
+            var pipeConfigsForGeneration = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();
             await SwitchToMainThread(() =>
             {
-                try
+                foreach (var pipeInfo in pipesToCreate)
                 {
-                    // 다중 파이프 생성 설정 준비
-                    pipesBefore = _generator.Pipes.Count;
+                    Material pipeMaterial = new Material(Shader.Find("Universal Render Pipeline/Simple Lit"));
+                    pipeMaterial.name = $"Pipe_Material_{pipeInfo.Config.Name}";
+                    // 색상 정보를 올바르게 적용합니다.
+                    if (pipeMaterial.HasProperty("_BaseColor"))
+                        pipeMaterial.SetColor("_BaseColor", pipeInfo.Color);
+                    else if (pipeMaterial.HasProperty("_Color"))
+                        pipeMaterial.SetColor("_Color", pipeInfo.Color);
 
-                    // 파이프 생성 시작 메시지
-                    UpdateProgress(0.8f, $"경로 생성 중 ({processedPipes.Count}개 구성)...");
-
-                    // 최종 취소 확인
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        _isGeneratingPaths = false;
-                        EditorUtility.DisplayDialog("작업 취소됨", "최종 경로 생성 단계에서 작업이 취소되었습니다.", "확인");
-                        return;
-                    }
-
-                    // 재료 생성 (메인 스레드에서만 가능)
-                    foreach (var pipe in processedPipes)
-                    {
-                        // 각 파이프의 설정 추가
-                        Material pipeMaterial = new Material(Shader.Find("Universal Render Pipeline/Simple Lit"));
-                        pipeMaterial.name = $"Pipe_Material_{pipe.name}";
-
-                        // 셰이더에 따라 색상 설정
-                        if (pipeMaterial.HasProperty("_BaseColor"))
-                        {
-                            pipeMaterial.SetColor("_BaseColor", pipe.color);
-
-                            if (pipeMaterial.HasProperty("_EmissionColor"))
-                            {
-                                pipeMaterial.EnableKeyword("_EMISSION");
-                                pipeMaterial.SetColor("_EmissionColor", pipe.color * 0.5f);
-                            }
-                        }
-                        else if (pipeMaterial.HasProperty("_Color"))
-                        {
-                            pipeMaterial.SetColor("_Color", pipe.color);
-
-                            if (pipeMaterial.HasProperty("_EmissionColor"))
-                            {
-                                pipeMaterial.EnableKeyword("_EMISSION");
-                                pipeMaterial.SetColor("_EmissionColor", pipe.color * 0.5f);
-                            }
-                        }
-
-                        // 파이프 설정 추가
-                        pipeConfigs.Add((
-                            pipe.startPoint,
-                            pipe.startNormal,
-                            pipe.endPoint,
-                            pipe.endNormal,
-                            pipe.radius,
-                            pipeMaterial
-                        ));
-                    }
-
-                    // 메시 업데이트 진행 중 메시지
-                    UpdateProgress(0.85f, "파이프 경로 생성 중...");
-                }
-                catch (System.Exception ex)
-                {
-                    _isGeneratingPaths = false;
-                    UnityEngine.Debug.LogError($"파이프 재료 생성 중 오류: {ex.Message}");
-                    EditorUtility.DisplayDialog("오류 발생",
-                        "파이프 재료 생성 중 오류가 발생했습니다.",
-                        "확인");
+                    pipeConfigsForGeneration.Add((
+                        pipeInfo.StartPoint, pipeInfo.StartNormal,
+                        pipeInfo.EndPoint, pipeInfo.EndNormal,
+                        pipeInfo.Radius, pipeMaterial
+                    ));
                 }
             });
 
-            // 취소 확인
-            if (cancellationToken.IsCancellationRequested)
-            {
-                await SwitchToMainThread(() =>
-                {
-                    _isGeneratingPaths = false;
-                    EditorUtility.DisplayDialog("작업 취소됨", "메시 생성 직전에 작업이 취소되었습니다.", "확인");
-                });
-                return;
-            }
+            // --------------------------------------------------------------------------------
+            // 단계 3: 최적 경로 탐색 (모든 Unity API 호출을 메인 스레드에서 실행)
+            // --------------------------------------------------------------------------------
+            float shortestPathValue = float.MaxValue;
+            var bestPipeConfigOrder = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();
 
-            // 파이프 생성 실행 (메인 스레드에서만 가능)
-            bool success = false;
-            int newPipesCount = 0;
-            List<float> Chaoses = new List<float> { 3f};
-            List<int> miters = new List<int> { 5};
-            int randTimeOriginal = 0;
-            var pipeConfigsOriginal = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();
-            float shortestPathValue = 9000000f;
-            foreach (var miter in miters)
-            {
-                foreach (var chaos in Chaoses)
-                {
+            List<float> Chaoses = new List<float> { 3f };
+            List<int> miters = new List<int> { 5 };
+            int totalIterations = miters.Sum(m => m) * Chaoses.Count;
+            int currentIteration = 0;
 
-                    for (int i = 0; i < miter; i++)
+            // Task.Run을 사용하되, 모든 핵심 로직을 메인 스레드로 보내 실행하여 스레드 오류를 원천 차단합니다.
+            await Task.Run(async () =>
+            {
+                await SwitchToMainThread(async () =>
+                {
+                    Stopwatch sw = new Stopwatch();
+                    foreach (var miter in miters)
                     {
-                        _generator.Chaos = chaos;
-                        _generator.miter = miter;
-                        await SwitchToMainThread(() =>
+                        foreach (var chaos in Chaoses)
                         {
-                            int randTime = (int)DateTime.Now.Ticks;
-                            UnityEngine.Random.InitState(randTime);
-                            float pathValue = 9999999f;
-                            ShuffleList(pipeConfigs);
-                            try
+                            for (int i = 0; i < miter; i++)
                             {
-                                // 다중 파이프 생성 실행
-                                Stopwatch sw = new Stopwatch();
-                                sw.Start();
-                                pathValue = _generator.AddMultiplePipes(pipeConfigs);
+                                if (cancellationToken.IsCancellationRequested) return;
+
+                                currentIteration++;
+                                float progress = 0.1f + (0.8f * (float)currentIteration / totalIterations);
+                                UpdateProgress(progress, $"최적 경로 탐색 중... ({currentIteration}/{totalIterations})");
                                 
+                                // 이제 이 코드는 100% 메인 스레드에서 실행되므로 안전합니다.
+                                UnityEngine.Random.InitState((int)DateTime.Now.Ticks);
+                                
+                                var shuffledConfigs = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>(pipeConfigsForGeneration);
+                                ShuffleList(shuffledConfigs);
+
+                                _generator.Chaos = chaos;
+                                _generator.miter = miter;
+
+                                sw.Restart();
+                                float pathValue = _generator.AddMultiplePipes(shuffledConfigs);
                                 sw.Stop();
-                                UnityEngine.Debug.Log("총 소요 시간(ms)" + sw.ElapsedMilliseconds);
+                                UnityEngine.Debug.Log($"경로 탐색 소요 시간: {sw.ElapsedMilliseconds}ms, 총 길이: {pathValue}");
+
                                 if (pathValue < shortestPathValue)
                                 {
                                     shortestPathValue = pathValue;
-                                    randTimeOriginal = randTime;
-                                    pipeConfigsOriginal = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>(pipeConfigs);
-                                    }
-
-                                // 메시 업데이트 진행 중 메시지
-                                    UpdateProgress(0.95f, "메시 업데이트 중...");
+                                    bestPipeConfigOrder = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>(shuffledConfigs);
+                                }
+                                
+                                // Editor가 멈추지 않도록 잠시 제어권을 넘겨줍니다.
+                                await Task.Delay(1); 
                             }
-                            catch (System.Exception ex)
+                        }
+                    }
+                    
+                    // --------------------------------------------------------------------------------
+                    // 단계 4: 최적 경로로 최종 생성 (메인 스레드)
+                    // --------------------------------------------------------------------------------
+                    if (!cancellationToken.IsCancellationRequested && bestPipeConfigOrder.Count > 0)
+                    {
+                        UpdateProgress(0.95f, "최적 경로로 최종 생성 중...");
+                        _generator.AddMultiplePipes(bestPipeConfigOrder);
+                        
+                        // 파이프와 설정(Config)을 다시 연결해주는 로직
+                        int pipeIndexCounter = 0;
+                        foreach (var config in _pipeConfigs)
+                        {
+                            config.AssociatedPipeIndices.Clear();
+                        }
+
+                        foreach (var orderedConfigTuple in bestPipeConfigOrder)
+                        {
+                            // 생성된 순서대로 어떤 원본 설정에 속하는지 찾습니다.
+                            var originalPipeInfo = pipesToCreate.Find(p => 
+                                p.Radius == orderedConfigTuple.Item5 && 
+                                p.StartPoint == orderedConfigTuple.Item1
+                            );
+
+                            if(originalPipeInfo != null)
                             {
-                                _isGeneratingPaths = false;
-                                UnityEngine.Debug.LogError($"파이프 생성 중 오류: {ex.Message}");
-                                EditorUtility.DisplayDialog("오류 발생",
-                                    "파이프 생성 중 오류가 발생했습니다.",
-                                    "확인");
-                                return;
+                                originalPipeInfo.Config.AssociatedPipeIndices.Add(pipeIndexCounter++);
                             }
-                        });
+                        }
                     }
-
-                }
-            }
-            await SwitchToMainThread(() =>
-            {
-                int randTime = (int)DateTime.Now.Ticks;
-                UnityEngine.Random.InitState(randTimeOriginal);
-                ShuffleList(pipeConfigs);
-                try
-                {
-                    // 다중 파이프 생성 실행
-                    shortestPathValue = _generator.AddMultiplePipes(pipeConfigsOriginal);
-                    UnityEngine.Debug.Log($"최소 경로 거리 {shortestPathValue}");
-                }
-                catch (System.Exception ex)
-                {
-                    _isGeneratingPaths = false;
-                    UnityEngine.Debug.LogError($"파이프 생성 중 오류: {ex.Message}");
-                    EditorUtility.DisplayDialog("오류 발생",
-                        "파이프 생성 중 오류가 발생했습니다.",
-                        "확인");
-                    return;
-                }
+                });
             });
-
-
-            // 파이프 생성 결과 처리 (메인 스레드에서만 가능)
+            
+            // --------------------------------------------------------------------------------
+            // 단계 5: 완료
+            // --------------------------------------------------------------------------------
             await SwitchToMainThread(() =>
             {
-                for (int i = 0; i < pipeConfigs.Count; i++)
+                EditorUtility.ClearProgressBar();
+                _isGeneratingPaths = false;
+                Repaint();
+                if(!cancellationToken.IsCancellationRequested)
                 {
-                    int configIndex = pipesToCreate.FindIndex(p =>
-                            p.StartPoint == pipeConfigs[i].startPoint &&
-                            p.EndPoint == pipeConfigs[i].endPoint);
-
-                    if (configIndex >= 0 && configIndex < pipesToCreate.Count)
-                    {
-                        int pipeIndex = i;
-                        pipesToCreate[configIndex].Config.AssociatedPipeIndices.Add(pipeIndex);
-                    }
+                    EditorUtility.DisplayDialog("완료", $"총 {pipesToCreate.Count}개의 파이프 생성이 완료되었습니다.\n최적 경로 길이: {shortestPathValue}", "확인");
                 }
-                    // 완료 메시지 표시
-                UpdateProgress(1.0f, "작업 완료!");
-
-                    // 1초 후 진행 상태 표시 닫기
-                    EditorApplication.delayCall += () =>
-                    {
-                        // 생성 완료 후 상태 초기화
-                        _isGeneratingPaths = false;
-                        Repaint();
-
-                    };
-
-                // 씬 업데이트
-                UpdateAllPipeMaterials();
-                SceneView.RepaintAll();
             });
         }
 

@@ -21,6 +21,7 @@ namespace InstantPipes
         public static bool operator ==(Vec3Int lhs, Vec3Int rhs) => lhs.Equals(rhs);
         public static bool operator !=(Vec3Int lhs, Vec3Int rhs) => !(lhs == rhs);
     }
+    
 
     [ExecuteAlways]
     [RequireComponent(typeof(MeshFilter))]
@@ -145,49 +146,49 @@ namespace InstantPipes
 
             var allSubmeshes = new List<CombineInstance>();
             var allMaterials = new List<Material>();
-            Shader shaderToUse = Shader.Find("Universal Render Pipeline/Simple Lit");
-            if (Material != null && Material.shader != null) shaderToUse = Material.shader;
 
             for (int i = 0; i < Pipes.Count; i++)
             {
                 if (Pipes[i].Points == null || Pipes[i].Points.Count < 2) continue;
-                
+
                 float pipeRadius = (i < PipeRadiuses.Count) ? PipeRadiuses[i] : Radius;
                 float originalRadius = Radius;
                 Radius = pipeRadius;
                 
-                var pipeMeshes = Pipes[i].GenerateMeshes(this);
-                if (pipeMeshes != null && pipeMeshes.Count > 0)
-                {
-                    foreach (var mesh in pipeMeshes)
-                    {
-                        if (mesh.vertexCount > 0)
-                        {
-                            allSubmeshes.Add(new CombineInstance { mesh = mesh, transform = Matrix4x4.identity });
-                        }
-                    }
-                }
-                _maxDistanceBetweenPoints = Mathf.Max(_maxDistanceBetweenPoints, Pipes[i].GetMaxDistanceBetweenPoints());
-                
-                Radius = originalRadius;
+                // [수정 시작] 메쉬와 재질의 순서가 어긋나는 문제를 근본적으로 해결하는 로직입니다.
+                var pipeMeshes = Pipes[i].GenerateMeshes(this); // 파이프 메쉬는 2개까지 반환될 수 있습니다: [0]=몸통, [1]=링/캡
                 Material pipeMaterial = (i < PipeMaterials.Count && PipeMaterials[i] != null) ? PipeMaterials[i] : Material;
 
-                if (IsSeparateRingsMaterial && (HasCaps || HasRings))
+                // 첫 번째 메쉬(파이프 몸통)를 처리합니다.
+                // 정점이 0보다 큰 유효한 메쉬일 경우에만 메쉬와 재질을 함께 리스트에 추가합니다.
+                if (pipeMeshes != null && pipeMeshes.Count > 0 && pipeMeshes[0].vertexCount > 0)
                 {
+                    allSubmeshes.Add(new CombineInstance { mesh = pipeMeshes[0], transform = Matrix4x4.identity });
                     allMaterials.Add(pipeMaterial);
-                    allMaterials.Add(RingMaterial != null ? RingMaterial : pipeMaterial);
                 }
-                else
+
+                // 두 번째 메쉬(링 또는 캡)를 처리합니다.
+                // 마찬가지로 유효한 메쉬일 경우에만 메쉬와 그에 맞는 재질을 추가합니다.
+                if (pipeMeshes != null && pipeMeshes.Count > 1 && pipeMeshes[1].vertexCount > 0)
                 {
-                    allMaterials.Add(pipeMaterial);
-                    if (HasCaps || HasRings) allMaterials.Add(pipeMaterial);
+                    allSubmeshes.Add(new CombineInstance { mesh = pipeMeshes[1], transform = Matrix4x4.identity });
+                    
+                    Material ringOrCapMaterial = pipeMaterial; // 기본적으로 파이프 재질을 사용
+                    if (IsSeparateRingsMaterial && (HasCaps || HasRings))
+                    {
+                        ringOrCapMaterial = (RingMaterial != null) ? RingMaterial : pipeMaterial;
+                    }
+                    allMaterials.Add(ringOrCapMaterial);
                 }
+                
+                _maxDistanceBetweenPoints = Mathf.Max(_maxDistanceBetweenPoints, Pipes[i].GetMaxDistanceBetweenPoints());
+                Radius = originalRadius;
+                // [수정 끝]
             }
             
             if (allSubmeshes.Count > 0)
             {
                 _mesh.Clear();
-                // ★★★ 핵심 수정 1: 32비트 인덱스 포맷으로 정점 한도 확장 ★★★
                 if(allSubmeshes.Sum(c => c.mesh.vertexCount) > 65535)
                 {
                     _mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
@@ -706,7 +707,6 @@ namespace InstantPipes
                         Vector3 cellCenter = new Vector3(minX + (x + 0.5f) * GridSize, minY + (y + 0.5f) * GridSize, minZ + (z + 0.5f) * GridSize);
                         int index = x + y * countX + z * countX * countY;
                         
-                        // [수정] 그리드 셀과 정확히 일치하는 박스 형태로 장애물을 감지합니다.
                         if (Physics.OverlapBox(cellCenter, boxHalfExtents, Quaternion.identity, ObstacleLayer).Length > 0) {
                             obstacles[index] = OBSTACLE_COST;
                         } else {
@@ -722,7 +722,6 @@ namespace InstantPipes
             var paths = new List<List<Vector3>>(new List<Vector3>[pipeConfigs.Count]);
             bool allSucceeded = true;
             
-            // 굵은 파이프부터 경로를 탐색하도록 정렬
             var sortedPipes = pipeConfigs
                 .Select((config, index) => new { Config = config, OriginalIndex = index })
                 .OrderByDescending(p => p.Config.radius)
@@ -734,7 +733,7 @@ namespace InstantPipes
                 var config = pipeInfo.Config;
                 int originalIndex = pipeInfo.OriginalIndex;
 
-                var pathBuffer = new Vec3[4096]; // 경로를 받을 버퍼 (넉넉하게 설정)
+                var pathBuffer = new Vec3[4096];
                 int pathLength;
                 fixed (Vec3* pPathBuffer = pathBuffer)
                 {
@@ -754,24 +753,22 @@ namespace InstantPipes
                     finalPath.Add(config.endPoint);
                     paths[originalIndex] = finalPath;
 
-                    // ★★★ [핵심 수정] 파이프간 충돌 방지를 위해, 생성된 파이프 경로를 새 장애물로 등록 ★★★
                     List<Vec3Int> pipeCells = RasterizePathToGrid(finalPath, minBounds, GridSize, countX, countY, countZ, config.radius);
                     
                     Vec3Int* cellsToUpdate = stackalloc Vec3Int[pipeCells.Count];
                     for (int i = 0; i < pipeCells.Count; i++) cellsToUpdate[i] = pipeCells[i];
                     
-                    // 기존 장애물보다 훨씬 높은 비용을 부여하여 다른 파이프가 절대 침범하지 못하도록 합니다.
                     UpdateCosts(cellsToUpdate, pipeCells.Count, OBSTACLE_COST * 5); 
                 }
                 else
                 {
-                    UnityEngine.Debug.LogError($"[PipeGenerator] 파이프 #{originalIndex}의 경로를 찾지 못했습니다. 시작점과 끝점이 장애물에 막혀있거나, 공간이 부족할 수 있습니다.");
+                    UnityEngine.Debug.LogError($"[PipeGenerator] 파이프 #{originalIndex}의 경로를 찾지 못했습니다.");
                     allSucceeded = false;
                     break;
                 }
             }
 
-            ReleaseGrid(); // 모든 경로 탐색 후 C++ 메모리 해제
+            ReleaseGrid();
 
             // 5. 결과 처리 및 메시 생성
             Pipes.Clear();
@@ -783,10 +780,27 @@ namespace InstantPipes
             {
                 for (int i = 0; i < pipeConfigs.Count; i++)
                 {
+                    var config = pipeConfigs[i];
                     Pipes.Add(new Pipe(paths[i]));
-                    PipeRadiuses.Add(pipeConfigs[i].radius);
-                    PipeMaterials.Add(pipeConfigs[i].material);
+                    PipeRadiuses.Add(config.radius);
                     totalLength += CalculatePathLength(paths[i]);
+
+                    // [수정 시작] 각 파이프에 대해 독립적인 재질 인스턴스를 생성합니다.
+                    Material sourceMaterial = config.material;
+                    Material instancedMaterial = null;
+
+                    if (sourceMaterial != null)
+                    {
+                        // AddPipe 함수와 동일한 로직을 사용하여 재질 인스턴스를 생성합니다.
+                        Shader shaderToUse = sourceMaterial.shader ?? Shader.Find("Universal Render Pipeline/Simple Lit");
+                        if (shaderToUse == null) shaderToUse = Shader.Find("Standard");
+
+                        instancedMaterial = new Material(shaderToUse);
+                        instancedMaterial.name = $"Pipe_{i}_{sourceMaterial.name}_Inst";
+                        instancedMaterial.CopyPropertiesFromMaterial(sourceMaterial);
+                    }
+                    PipeMaterials.Add(instancedMaterial); // 원본 재질 대신 새로 생성된 인스턴스를 추가합니다.
+                    // [수정 끝]
                 }
             }
             UpdateMesh();
