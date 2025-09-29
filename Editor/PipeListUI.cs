@@ -350,11 +350,11 @@ namespace InstantPipes
                 }
 
                 // Add regenerate button
-                GUI.backgroundColor = Color.green;
-                if (GUILayout.Button("Regenerate Pipes") && _activeConfig.AssociatedPipeIndices.Count > 0)
-                {
-                    RegeneratePipesWithNewRadius();
-                }
+                //GUI.backgroundColor = Color.green;
+                //if (GUILayout.Button("Regenerate Pipes") && _activeConfig.AssociatedPipeIndices.Count > 0)
+                //{
+                //    RegeneratePipesWithNewRadius();
+                //}
                 GUI.backgroundColor = Color.white;
             }
 
@@ -820,7 +820,7 @@ namespace InstantPipes
             Undo.RecordObject(_generator, "Create Pipe Path");
 
             // Set default path creator settings
-            _generator.GridSize = 1f;
+            _generator.GridSize = 1;
             _generator.Height = 3f;
 
             // Create a new material instance for this pipe
@@ -1161,8 +1161,8 @@ namespace InstantPipes
             // 파이프 생성 실행 (메인 스레드에서만 가능)
             bool success = false;
             int newPipesCount = 0;
-            List<float> Chaoses = new List<float> { 0f};
-            List<int> miters = new List<int> { 1};
+            List<float> Chaoses = new List<float> { 3f};
+            List<int> miters = new List<int> { 5};
             int randTimeOriginal = 0;
             var pipeConfigsOriginal = new List<(Vector3, Vector3, Vector3, Vector3, float, Material)>();
             float shortestPathValue = 9000000f;
@@ -1175,8 +1175,6 @@ namespace InstantPipes
                     {
                         _generator.Chaos = chaos;
                         _generator.miter = miter;
-                        Stopwatch sw = new Stopwatch();
-                        sw.Start();
                         await SwitchToMainThread(() =>
                         {
                             int randTime = (int)DateTime.Now.Ticks;
@@ -1186,8 +1184,12 @@ namespace InstantPipes
                             try
                             {
                                 // 다중 파이프 생성 실행
+                                Stopwatch sw = new Stopwatch();
+                                sw.Start();
                                 pathValue = _generator.AddMultiplePipes(pipeConfigs);
-
+                                
+                                sw.Stop();
+                                UnityEngine.Debug.Log("총 소요 시간(ms)" + sw.ElapsedMilliseconds);
                                 if (pathValue < shortestPathValue)
                                 {
                                     shortestPathValue = pathValue;
@@ -1208,8 +1210,6 @@ namespace InstantPipes
                                 return;
                             }
                         });
-                        sw.Stop();
-                        UnityEngine.Debug.Log("총 소요 시간(ms)" + sw.ElapsedMilliseconds);
                     }
 
                 }
@@ -1440,7 +1440,7 @@ namespace InstantPipes
                     }
 
                     // Set other parameters to ensure path finding works
-                    _generator.GridSize = 3f;
+                    _generator.GridSize = 1;
                     _generator.Height = 5f;
 
                     // 경로 재생성 진행 메시지 표시
@@ -1771,7 +1771,7 @@ namespace InstantPipes
             float safeRadius = Mathf.Max(0.1f, _activeConfig.Radius);
 
             // Set the path creator settings
-            _generator.GridSize = 3f;
+            _generator.GridSize = 1;
             _generator.Height = 5f;
 
             // Recreate each pipe

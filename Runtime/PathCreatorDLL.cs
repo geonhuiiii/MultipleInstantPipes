@@ -4,7 +4,6 @@ using UnityEngine;
 using System.Runtime.InteropServices;
 using System;
 using System.Threading.Tasks;
-using System.Diagnostics;
 
 
 namespace InstantPipes
@@ -46,14 +45,10 @@ namespace InstantPipes
     [System.Serializable]
     public unsafe class PathCreatorDLL
     {
+        private NewPathfinderDLL _pathfinder;
 
-        [DllImport("astar")] 
-        unsafe private static extern void FindPath(ref VECTOR3* data, ref int pathCount, VECTOR3 start, VECTOR3 end, float radius, int maxIterations, float gridSize);
-        
-        [DllImport("astar")] 
-        unsafe private static extern void Init(ref byte* obstacles, int obstacleCount);
-        [DllImport("astar")] 
-        unsafe private static extern void freeObstacles();
+        [DllImport("pathfinder")] 
+        unsafe private static extern void FindPath(VECTOR3 start, VECTOR3 end, VECTOR3 *outdata, ref int returnSize);
         
         public float Height = 5;
         public float GridRotationY = 0;
@@ -68,7 +63,7 @@ namespace InstantPipes
         public bool LastPathSuccess = true;
         int pathCounts = 0;
         VECTOR3* flatArray = null;
-        public byte* obstaclesArray = null;
+        public int* obstaclesArray = null;
         public int obstacleCount = 0;
         Vector3[] directions = new Vector3[]
         {
@@ -80,46 +75,43 @@ namespace InstantPipes
             Vector3.back
         };
         
+        
         public List<Vector3> Create(Vector3 startPoint, Vector3 startNormal, Vector3 endPoint, Vector3 endNormal, float pipeRadius)
         {
+            hasCollision = false;
             Radius = pipeRadius;
             var path = new List<Vector3>();
             var pathStart = startPoint + startNormal.normalized * Height;
             var pathEnd = endPoint + endNormal.normalized * Height;
             var baseDirection = (pathEnd - pathStart).normalized;
             var gridSize = GridSize;
-            float minX = Mathf.Min(pathStart.x, pathEnd.x)-gridSize*2.0f;
-            float maxX = Mathf.Max(pathStart.x, pathEnd.x)+gridSize*2.0f;
+            float minX = Mathf.Min(pathStart.x, pathEnd.x) - gridSize * 2.0f;
+            float maxX = Mathf.Max(pathStart.x, pathEnd.x) + gridSize * 2.0f;
             float minY = Mathf.Min(pathStart.y, pathEnd.y);
-            float maxY = Mathf.Max(pathStart.y, pathEnd.y)+gridSize*2.0f;
-            float minZ = Mathf.Min(pathStart.z, pathEnd.z)-gridSize*2.0f;
-            float maxZ = Mathf.Max(pathStart.z, pathEnd.z)+gridSize*2.0f;
+            float maxY = Mathf.Max(pathStart.y, pathEnd.y) + gridSize * 2.0f;
+            float minZ = Mathf.Min(pathStart.z, pathEnd.z) - gridSize * 2.0f;
+            float maxZ = Mathf.Max(pathStart.z, pathEnd.z) + gridSize * 2.0f;
 
-            int countX = Mathf.FloorToInt((maxX - minX) / gridSize) + 10;
-            int countY = Mathf.FloorToInt((maxY - minY) / gridSize) + 10;
-            int countZ = Mathf.FloorToInt((maxZ - minZ) / gridSize) + 10;
+            int countX = Mathf.FloorToInt((maxX - minX) / gridSize);
+            int countY = Mathf.FloorToInt((maxY - minY) / gridSize);
+            int countZ = Mathf.FloorToInt((maxZ - minZ) / gridSize);
 
 
             VECTOR3 start = new VECTOR3(pathStart);
             VECTOR3 end = new VECTOR3(pathEnd);
             var pathPoints = new List<Point>();
             VECTOR3* flatArray = stackalloc VECTOR3[countX * countY * countZ];
-            Init(ref obstaclesArray, obstacleCount);
+            DateTime tstart = DateTime.UtcNow;
+            FindPath(start, end, flatArray, ref pathCounts);
+            UnityEngine.Debug.Log("Pathfinding task completed");
 
-            Stopwatch sw = new Stopwatch();
-            sw.Start();
-            Task task = Task.Run(() =>
-            {
-                FindPath(ref flatArray, ref pathCounts, start, end, Radius, MaxIterations, gridSize);
-                UnityEngine.Debug.Log("Pathfinding task completed");
-            });
-            task.Wait();
-            UnityEngine.Debug.Log(pathCounts + " path points found");
-            UnityEngine.Debug.Log(flatArray[0].ToVector3() + " start point");
             for (int i = 0; i < pathCounts; i++)
             {
                 pathPoints.Add(new Point(flatArray[i].ToVector3()));
+                //*(obstaclesArray + (int)(MathF.Round(flatArray[i].x/gridSize)) % countX + (int)(MathF.Round(flatArray[i].y/gridSize)) / countX % countY + (int)MathF.Round(flatArray[i].z/gridSize) / (countX * countY) % countZ) = 1;
             }
+
+
 
 
             path.Add(startPoint);
@@ -129,11 +121,16 @@ namespace InstantPipes
 
             if (pathPoints != null)
             {
+
                 pathPoints.ForEach(pathPoint => path.Add(pathPoint.Position));
+                pathPoints.RemoveAt(0);
+                pathPoints.RemoveAt(0);
+                pathPoints.RemoveAt(pathPoints.Count - 1);
+                pathPoints.RemoveAt(pathPoints.Count - 1);
                 foreach (var pp in pathPoints)
                 {
                     if (hasCollision == false)
-                        hasCollision = pp.GetCollision(Radius, Quaternion.AngleAxis(GridRotationY, Vector3.up));
+                        hasCollision = pp.GetCollision(Radius * 0.5f);
                     if (hasCollision)
                         break;
                 }
@@ -145,9 +142,11 @@ namespace InstantPipes
 
             path.Add(pathEnd);
             path.Add(endPoint);
-            
-            sw.Stop();
-            UnityEngine.Debug.Log("경로 생성 소요 시간(ms)" + sw.ElapsedMilliseconds);
+            DateTime tend = DateTime.UtcNow;
+            TimeSpan elapsed = tend - tstart;
+
+            UnityEngine.Debug.Log($"DLL 경로 생성 실행 시간: {elapsed.TotalMilliseconds} ms");
+
             return path;
         }
 
@@ -172,7 +171,7 @@ namespace InstantPipes
                     for (float step = 0; step < distance; step += Radius)
                     {
                         Vector3 point = current.Position + direction * step;
-                        if (Physics.CheckSphere(point, Radius * 1.2f))
+                        if (Physics.CheckSphere(point, Radius * 1.5f))
                         {
                             clearPath = false;
                             break;
@@ -247,16 +246,9 @@ namespace InstantPipes
                 return minDistance;
             }
 
-            public bool GetCollision(float radius, Quaternion rotation)
+            public bool GetCollision(float radius)
             {
-                RaycastHit hit;
-                var a = Physics.SphereCast(Position, radius, Vector3.up, out hit, 0f);
-                if (a)
-                {
-                    return true;
-                }
-
-                return false;
+                return Physics.CheckSphere(Position, radius);
             }
 
             public List<Vector3> GetNeighbors(float gridSize, float radius, Quaternion rotation)

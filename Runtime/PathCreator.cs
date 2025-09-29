@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Net;
 using UnityEngine;
+using System.Runtime.InteropServices;
+using System;
 
 namespace InstantPipes
 {
@@ -26,9 +28,13 @@ namespace InstantPipes
             var pathStart = startPoint + startNormal.normalized * Height;
             var pathEnd = endPoint + endNormal.normalized * Height;
             var baseDirection = (pathEnd - pathStart).normalized;
-
+            
+            DateTime start = DateTime.UtcNow;
             var pathPoints = FindPath(new Point(pathStart), new Point(pathEnd), startNormal.normalized);
+            DateTime end = DateTime.UtcNow;
+            TimeSpan elapsed = end - start;
 
+            UnityEngine.Debug.Log($"일반 경로 생성 실행 시간: {elapsed.TotalMilliseconds} ms");
             path.Add(startPoint);
             path.Add(pathStart);
 
@@ -61,7 +67,7 @@ namespace InstantPipes
             var processed = new List<Point>();
             var visited = new List<Vector3>();
             var priorityFactor = start.GetDistanceTo(target) / 100;
-            Random.seed = (int)(Time.time * 1000);
+            UnityEngine.Random.seed = (int)(Time.time * 1000);
 
             Dictionary<Vector3, Point> pointDictionary = new Dictionary<Vector3, Point>();
 
@@ -121,7 +127,7 @@ namespace InstantPipes
                         costToNeighbor += StraightPathPriority * priorityFactor;
                     }
 
-                    costToNeighbor += Random.Range(-Chaos, Chaos) * priorityFactor;
+                    costToNeighbor += UnityEngine.Random.Range(-Chaos, Chaos) * priorityFactor;
 
                     if (NearObstaclesPriority != 0)
                     {
