@@ -1,6 +1,6 @@
-InstantMultiplePipes: High-Performance Procedural Pipe Routing for Unity
+MultipleInstantPipes: High-Performance Procedural Pipe Routing for Unity
 
-InstantMultiplePipes is a high-performance Unity asset for procedurally generating complex 3D pipe networks. Based on user-defined start points, endpoints, and environmental obstacles, it automatically calculates optimal routing paths.
+MultipleInstantPipes is a high-performance Unity asset for procedurally generating complex 3D pipe networks. Based on user-defined start points, endpoints, and environmental obstacles, it automatically calculates optimal routing paths.
 
 The core pathfinding logic is handled by a high-performance DLL written in C++, ensuring fast and efficient computation even in large-scale, complex environments. This system is ideal for applications in industrial plant simulations, game level design, architectural visualization, and more.
 
